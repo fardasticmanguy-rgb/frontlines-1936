@@ -433,6 +433,11 @@ input {
   font-size: 19px;
   letter-spacing: 0.08em;
   color: var(--gold);
+  transition: color 0.6s;
+}
+#date.winter {
+  color: #cfe6ff;
+  text-shadow: 0 0 10px rgba(160, 205, 255, 0.45);
 }
 
 #clock {
@@ -609,6 +614,42 @@ input {
 
 .hint {
   max-width: 440px;
+}
+.trait {
+  margin: 2px 0 6px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  color: var(--dim);
+}
+.trait b {
+  font-family: Oswald, system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+.report {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--soft);
+}
+.report b {
+  font-family: Oswald, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+}
+.report .good,
+.report .bad {
+  font-size: 13px;
+}
+.meta.bad {
+  font-size: 13px;
+  color: var(--bad);
 }
 
 .meta b,
@@ -951,4 +992,49 @@ input {
   .row .label {
     min-width: 90px;
   }
+}
+.row span.muted {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.nation {
+  cursor: pointer;
+}
+.nation.picked img {
+  outline: 2px solid #fff3c4;
+  outline-offset: 1px;
+}
+.nation.allied img {
+  outline: 2px solid #8fc7ff;
+  outline-offset: 1px;
+}
+.nation.allied::after {
+  content: "ALLY";
+  position: absolute;
+  bottom: -9px;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: #8fc7ff;
+}
+.nation.courting img {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+  animation: courting 0.8s ease-in-out infinite alternate;
+}
+@keyframes courting {
+  from {
+    outline-color: rgba(241, 207, 107, 0.25);
+  }
+  to {
+    outline-color: rgba(241, 207, 107, 1);
+  }
+}
+.row button.go {
+  background: #4f7a3a;
+  color: #fff;
+}
+.row button.danger {
+  background: #86372c;
+  color: #fff;
 }

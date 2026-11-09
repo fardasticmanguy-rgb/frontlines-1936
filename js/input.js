@@ -1,6 +1,7 @@
 import { unlockAudio, playSound } from "./audio.js";
 import { addMove, availableFrom, canPlan } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
+import { areAllied } from "./rules.js";
 import { canvas } from "./render.js";
 import { store } from "./store.js";
 import { keepAwake, renderPanel, toast } from "./ui.js";
@@ -123,6 +124,7 @@ function finishDrag(game, drag, target) {
 }
 
 function handleTap(game, target) {
+  game.selectedNation = -1;
   if (target < 0) {
     game.selected = -1;
     renderPanel();
@@ -138,6 +140,11 @@ function handleTap(game, target) {
     store.map.provinces[selected].neighbors.includes(target) &&
     availableFrom(selected) > 0;
 
+  if (attackFromSelection && areAllied(game.state, game.me, game.state.owner[target])) {
+    game.selected = target;
+    renderPanel();
+    return;
+  }
   if (attackFromSelection) {
     addMove(selected, target, availableFrom(selected));
     return;
