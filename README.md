@@ -6,12 +6,14 @@ A four-player grand strategy game for tablets, inspired by Hearts of Iron. Every
 
 ## Features
 
-- Procedurally generated continent (Voronoi provinces, terrain, cities) from a shared seed
+- Procedurally generated continent (~90 Voronoi provinces, terrain, 22 cities) from a shared seed
 - Simultaneous turns with deterministic combat: no dice, terrain and forts multiply defense
 - Supply lines: provinces cut off from your cities are weakened and lose divisions every turn
 - Seasons: winter (Dec–Feb) weakens every offensive
 - Asymmetric nations: Blitzkrieg, Industrial Base, Mass Mobilization and Fortress Doctrine
 - World events (strikes, booms, volunteers, partisans, harvests) and a monthly report
+- Alliances: offer a pact by tapping a flag; allies share supply, fight together and win together
+- Factories upgrade to level 3 and lose a level when captured
 - Online play for up to 4 players over WebRTC, with public and private lobbies
 - Empty or disconnected seats are taken over by an AI; players can rejoin and hosts can resume
 - Touch-first controls: drag to attack, pinch to zoom, auto-rotating map on portrait screens

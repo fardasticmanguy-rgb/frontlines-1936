@@ -13,7 +13,7 @@ import { flagCanvases } from "./flags.js";
 import { canPlan } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
 import { createRng } from "./random.js";
-import { attackStrength, defenseStrength, supplyNetwork } from "./rules.js";
+import { areAllied, attackStrength, defenseStrength, supplyNetwork } from "./rules.js";
 import { store } from "./store.js";
 import { mapMatrix, updateLayout, view } from "./view.js";
 
@@ -794,8 +794,13 @@ function drawBorders(map, state, me) {
   strokeEdges(ctx, map, (e) => {
     const a = state.owner[e.a];
     const b = state.owner[e.b];
-    return bothLand(e) && a !== b && (a >= 0 || b >= 0);
+    return bothLand(e) && a !== b && (a >= 0 || b >= 0) && !areAllied(state, a, b);
   });
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "rgba(225, 240, 255, 0.85)";
+  ctx.lineWidth = 2;
+  strokeEdges(ctx, map, (e) => bothLand(e) && areAllied(state, state.owner[e.a], state.owner[e.b]));
+  ctx.setLineDash([]);
 
   if (me < 0 || !state.alive[me]) return;
   ctx.setLineDash([4, 4]);
@@ -804,7 +809,7 @@ function drawBorders(map, state, me) {
   strokeEdges(ctx, map, (e) => {
     const a = state.owner[e.a];
     const b = state.owner[e.b];
-    return bothLand(e) && a >= 0 && b >= 0 && a !== b && (a === me || b === me);
+    return bothLand(e) && a >= 0 && b >= 0 && a !== b && (a === me || b === me) && !areAllied(state, a, b);
   });
   ctx.setLineDash([]);
 }

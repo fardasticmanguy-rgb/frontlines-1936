@@ -102,6 +102,7 @@ const SOUNDS = {
       tone(pitch, 0.4, "sine", 0.16, 28, delay);
     }
   },
+  pact: () => arpeggio([262, 330, 392, 523], 0.11, 0.35, "triangle", 0.07),
   news: () => {
     for (let i = 0; i < 9; i++) tone(1400 + (i % 3) * 180, 0.018, "square", 0.018, 0, i * 0.055);
   },

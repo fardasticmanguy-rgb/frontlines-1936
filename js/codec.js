@@ -1,21 +1,29 @@
 import { DEFAULT_TURNS, NATIONS, NEUTRAL } from "./config.js";
-import { MAX_FACTORY_LEVEL, WORLD_EVENTS, emptyOrders } from "./rules.js";
+import { KEEP_OFFER, MAX_FACTORY_LEVEL, WORLD_EVENTS, emptyOrders } from "./rules.js";
 
 const UNOWNED = 9;
+const DIPLOMACY_KINDS = ["offer", "alliance", "break"];
 
 const numbers = (text) => text.split(",").map(Number);
 
 export function encodeState(state, { deadline = -1, ready = [], absent = [] } = {}, events = null) {
   const header = [state.turn, state.winner, deadline, state.maxTurns].join(",");
   const nations = NATIONS.map((n) =>
-    [state.industry[n], state.alive[n], ready[n] ? 1 : 0, absent[n] ? 1 : 0].join(","),
+    [
+      state.industry[n],
+      state.alive[n],
+      ready[n] ? 1 : 0,
+      absent[n] ? 1 : 0,
+      state.allies[n] ?? NEUTRAL,
+      state.offers[n] ?? NEUTRAL,
+    ].join(","),
   ).join(";");
   const provinces = state.owner
     .map((o, i) =>
       [o === NEUTRAL ? UNOWNED : o, state.troops[i], state.forts[i], state.factories[i]].join(","),
     )
     .join(";");
-  const e = { moves: [], battles: [], captures: [], attrition: [], world: null, ...events };
+  const e = { moves: [], battles: [], captures: [], attrition: [], world: null, diplomacy: [], ...events };
   const moves = e.moves.map((m) => [m.nation, m.from, m.to, m.sent, m.stop < 1 ? 1 : 0].join(",")).join(";");
   const captures = e.captures
     .map((c) => [c.province, c.from === NEUTRAL ? UNOWNED : c.from, c.to].join(","))
@@ -27,7 +35,10 @@ export function encodeState(state, { deadline = -1, ready = [], absent = [] } = 
         ",",
       )
     : "";
-  return [header, nations, provinces, moves, e.battles.join(","), captures, attrition, world].join("|");
+  const diplomacy = e.diplomacy.map((d) => [DIPLOMACY_KINDS.indexOf(d.kind), d.a, d.b].join(",")).join(";");
+  return [header, nations, provinces, moves, e.battles.join(","), captures, attrition, world, diplomacy].join(
+    "|",
+  );
 }
 
 function isOwner(value) {
@@ -52,16 +63,23 @@ export function decodeState(text, provinceCount) {
     factories: [],
     industry: [],
     alive: [],
+    allies: [],
+    offers: [],
   };
   const ready = [];
   const absent = [];
 
   parts[1].split(";").forEach((row, n) => {
-    const [industry, alive, isReady, isAbsent] = numbers(row);
+    const [industry, alive, isReady, isAbsent, ally, offer] = numbers(row);
     state.industry[n] = industry || 0;
     state.alive[n] = alive ? 1 : 0;
     ready[n] = isReady ? 1 : 0;
     absent[n] = isAbsent ? 1 : 0;
+    state.allies[n] = NATIONS.includes(ally) && ally !== n ? ally : NEUTRAL;
+    state.offers[n] = NATIONS.includes(offer) && offer !== n ? offer : NEUTRAL;
+  });
+  state.allies.forEach((ally, n) => {
+    if (ally >= 0 && state.allies[ally] !== n) state.allies[n] = NEUTRAL;
   });
 
   parts[2].split(";").forEach((row, i) => {
@@ -82,7 +100,7 @@ export function decodeState(text, provinceCount) {
     state.industry.every(Number.isFinite);
   if (!valid) return null;
 
-  const events = { moves: [], battles: [], captures: [], attrition: [], world: null };
+  const events = { moves: [], battles: [], captures: [], attrition: [], world: null, diplomacy: [] };
   if (parts[3]) {
     events.moves = parts[3]
       .split(";")
@@ -116,6 +134,14 @@ export function decodeState(text, provinceCount) {
     }
   }
 
+  if (parts[8]) {
+    events.diplomacy = parts[8]
+      .split(";")
+      .map(numbers)
+      .filter(([kind, a, b]) => DIPLOMACY_KINDS[kind] && NATIONS.includes(a) && NATIONS.includes(b))
+      .map(([kind, a, b]) => ({ kind: DIPLOMACY_KINDS[kind], a, b }));
+  }
+
   return { state, ready, absent, deadline, events };
 }
 
@@ -127,13 +153,14 @@ export function encodeOrders(orders) {
   const builds = Object.keys(orders.builds)
     .map((id) => `${id}:${orders.builds[id]}`)
     .join(",");
-  return [moves, recruits, builds].join("/");
+  const diplomacy = [orders.offer ?? KEEP_OFFER, orders.breakAlliance ? 1 : 0].join(":");
+  return [moves, recruits, builds, diplomacy].join("/");
 }
 
 export function decodeOrders(text) {
   const orders = emptyOrders();
   if (typeof text !== "string") return orders;
-  const [moves, recruits, builds] = text.split("/");
+  const [moves, recruits, builds, diplomacy] = text.split("/");
   const rows = (section) =>
     section
       ? section
@@ -145,5 +172,8 @@ export function decodeOrders(text) {
   for (const v of rows(moves)) if (v.length === 3) orders.moves.push({ from: v[0], to: v[1], count: v[2] });
   for (const v of rows(recruits)) if (v.length === 2) orders.recruits[v[0]] = v[1];
   for (const v of rows(builds)) if (v.length === 2) orders.builds[v[0]] = v[1];
+  const [offer, breakAlliance] = (diplomacy || "").split(":").map(Number);
+  if (Number.isInteger(offer)) orders.offer = offer;
+  orders.breakAlliance = breakAlliance === 1 ? 1 : 0;
   return orders;
 }

@@ -13,7 +13,13 @@ import { flagImage, flagUrls } from "./flags.js";
 import { applyPanelAction, availableFrom, canPlan, industryLeft, isGuest, isOnline } from "./game.js";
 import {
   FACTORY_OUTPUT,
+  KEEP_OFFER,
+  allianceGoal,
+  allyOf,
+  areAllied,
   attackStrength,
+  blocOf,
+  blocPoints,
   buildCostAt,
   canBuild,
   defenseMultiplier,
@@ -152,6 +158,14 @@ export function syncZoomButton() {
   if (button.hidden === zoomed) button.hidden = !zoomed;
 }
 
+function pactClass(game, nation) {
+  const { state, me } = game;
+  if (me < 0 || nation === me || !state.alive[nation]) return "";
+  if (areAllied(state, me, nation)) return "allied";
+  if (state.offers[nation] === me && allyOf(state, me) < 0) return "courting";
+  return "";
+}
+
 function nationBadge(game, nation) {
   const { state } = game;
   if (!state.alive[nation]) return "";
@@ -177,8 +191,11 @@ export function renderTopBar() {
     const industry = canPlan() ? industryLeft() : state.industry[me];
     $("stat-industry").innerHTML = `⚙ ${industry} <b>+${income(map, state, me)}</b><small>INDUSTRY</small>`;
     $("stat-factories").innerHTML = `🏭 ${factoryCount(state, me)}<small>FACTORY LV</small>`;
+    const bloc = blocOf(state, me);
     $("stat-victory").innerHTML =
-      `★ ${victoryPoints(map, state, me)}/${victoryGoal(map)}<small>VICTORY PTS</small>`;
+      bloc.length > 1
+        ? `★ ${blocPoints(map, state, bloc)}/${allianceGoal(map)}<small>ALLIANCE VP</small>`
+        : `★ ${victoryPoints(map, state, me)}/${victoryGoal(map)}<small>VICTORY PTS</small>`;
   } else {
     flag.hidden = true;
     $("nation-name").textContent = "SPECTATOR";
@@ -191,7 +208,7 @@ export function renderTopBar() {
   $("date").classList.toggle("winter", winter);
   $("nations").innerHTML = NATIONS.map(
     (n) => `
-      <div class="nation ${me === n ? "me" : ""} ${state.alive[n] ? "" : "dead"}">
+      <div class="nation ${me === n ? "me" : ""} ${state.alive[n] ? "" : "dead"} ${game.selectedNation === n ? "picked" : ""} ${pactClass(game, n)}" data-nation="${n}">
         <img src="${flagUrls[n]}" alt="">${nationBadge(game, n)}
         <span>★${victoryPoints(map, state, n)}</span>
       </div>`,
@@ -379,11 +396,81 @@ function orderRows(game, map, id) {
   return `<div class="actions">${rows.join("")}</div>`;
 }
 
+function relationOf(game, nation) {
+  const { state, me } = game;
+  const ally = allyOf(state, nation);
+  const plan = me >= 0 ? game.orders[me] : null;
+  const allyName = ally >= 0 ? NATION_NAMES[ally] : "";
+  if (!state.alive[nation]) return { text: "Defeated" };
+  if (nation === me) return { text: ally >= 0 ? `Your nation · allied with ${allyName}` : "Your nation" };
+  if (me < 0 || !state.alive[me])
+    return { text: ally >= 0 ? `Allied with ${allyName}` : "At war with everyone" };
+  if (areAllied(state, me, nation)) {
+    return plan?.breakAlliance
+      ? {
+          text: '🤝 Allied · <span class="bad">you will break the pact this turn</span>',
+          action: "diplo-keep",
+          label: "KEEP ALLIANCE",
+        }
+      : {
+          text: '🤝 <span class="good">Allied</span> · they can\'t attack you',
+          action: "diplo-break",
+          label: "BREAK ALLIANCE",
+          danger: true,
+        };
+  }
+  if (ally >= 0) return { text: `<span class="bad">At war</span> · allied with ${allyName}` };
+  if (allyOf(state, me) >= 0) return { text: '<span class="bad">At war</span> · you already have an ally' };
+  const standing = plan && plan.offer !== KEEP_OFFER ? plan.offer : state.offers[me];
+  if (standing === nation) {
+    return {
+      text: "✉ Your alliance offer is on the table",
+      action: "diplo-withdraw",
+      label: "WITHDRAW OFFER",
+    };
+  }
+  if (state.offers[nation] === me) {
+    return {
+      text: '✉ <span class="good">They propose an alliance!</span>',
+      action: "diplo-offer",
+      label: "ACCEPT ALLIANCE",
+    };
+  }
+  return { text: '<span class="bad">At war</span>', action: "diplo-offer", label: "OFFER ALLIANCE" };
+}
+
+function diplomacyPanel(game, map, nation) {
+  const { state } = game;
+  const relation = relationOf(game, nation);
+  const trait = NATION_TRAITS[nation];
+  const button =
+    relation.action && canPlan()
+      ? `<div class="actions"><div class="row"><button class="${relation.danger ? "danger" : "go"}" data-action="${relation.action}" data-id="${nation}">${relation.label}</button></div>
+         <div class="row muted">Alliances form once both nations have offered. Allies share supply lines, fight together and win together (★ ${allianceGoal(map)} needed instead of ${victoryGoal(map)}).</div></div>`
+      : "";
+  return `
+    <div class="info">
+      <div class="info-head">${flagImage(nation)}
+        <div>
+          <div class="info-title">${NATION_NAMES[nation]}</div>
+          <div class="info-sub">★ ${victoryPoints(map, state, nation)} · ${provinceCount(state, nation)} provinces · ${divisionCount(state, nation)} divisions · 🏭 ${factoryCount(state, nation)}</div>
+        </div>
+      </div>
+      <div class="trait"><b>${trait.name}</b> · ${trait.text}</div>
+      <div class="meta">${relation.text}</div>
+    </div>${button}`;
+}
+
 export function renderPanel() {
   const { game, map } = store;
   const panel = $("panel");
   panel.hidden = !game || game.mode === "demo";
   if (panel.hidden) return;
+
+  if (NATIONS.includes(game.selectedNation)) {
+    panel.innerHTML = diplomacyPanel(game, map, game.selectedNation) + economyBlock(game, map);
+    return;
+  }
 
   const id = game.selected;
   if (!map.provinces[id]) {
@@ -396,6 +483,17 @@ export function renderPanel() {
 }
 
 export function bindPanel() {
+  $("nations").addEventListener("click", (event) => {
+    const game = store.game;
+    const flag = event.target.closest("[data-nation]");
+    if (!game || !flag) return;
+    const nation = Number(flag.dataset.nation);
+    game.selectedNation = game.selectedNation === nation ? -1 : nation;
+    game.selected = -1;
+    playSound("click");
+    renderTopBar();
+    renderPanel();
+  });
   $("panel").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button) return;
@@ -410,27 +508,31 @@ export function renderGameOver() {
   const { state, me } = game;
   const winner = state.winner;
   const featured = winner >= 0 ? winner : me;
+  const winners = NATIONS.includes(winner) ? blocOf(state, winner) : [];
+  const won = winners.includes(me);
 
-  $("over-kicker").textContent = winner === me ? "VICTORY" : me >= 0 ? "DEFEAT" : "THE WAR IS OVER";
+  $("over-kicker").textContent = won ? "VICTORY" : me >= 0 ? "DEFEAT" : "THE WAR IS OVER";
   $("over-title").textContent =
     winner < 0
       ? `${NATION_NAMES[me]} HAS FALLEN`
       : winner < 4
-        ? `${NATION_NAMES[winner]} WINS`
+        ? winners.length > 1
+          ? `${winners.map((n) => NATION_NAMES[n]).join(" & ")} WIN`
+          : `${NATION_NAMES[winner]} WINS`
         : "NO NATION SURVIVES";
   $("over-flag").hidden = !NATIONS.includes(featured);
   if (NATIONS.includes(featured)) $("over-flag").src = flagUrls[featured];
 
   const ranking = NATIONS.slice().sort(
     (a, b) =>
-      (b === winner) - (a === winner) ||
+      winners.includes(b) - winners.includes(a) ||
       victoryPoints(map, state, b) - victoryPoints(map, state, a) ||
       provinceCount(state, b) - provinceCount(state, a),
   );
   $("over-standings").innerHTML = ranking
     .map(
       (n) => `
-        <div class="seat ${n === winner ? "winner" : ""}">${flagImage(n)}${NATION_NAMES[n]}
+        <div class="seat ${winners.includes(n) ? "winner" : ""}">${flagImage(n)}${NATION_NAMES[n]}
           <span>★${victoryPoints(map, state, n)} · ${provinceCount(state, n)} provinces</span>
         </div>`,
     )
@@ -440,6 +542,6 @@ export function renderGameOver() {
   $("over-again").hidden = guest;
   $("over-again").textContent = isOnline() ? "BACK TO LOBBY" : "PLAY AGAIN";
   $("over-note").textContent = guest ? "Waiting for the host to start a new war…" : "";
-  playSound(winner === me ? "victory" : "defeat");
+  playSound(won ? "victory" : "defeat");
   showScreen("over");
 }
