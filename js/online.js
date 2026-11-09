@@ -1,5 +1,5 @@
 import { planAiOrders } from "./ai.js";
-import { NATIONS, NATION_NAMES } from "./config.js";
+import { DEFAULT_TURNS, NATIONS, NATION_NAMES, NATION_TRAITS } from "./config.js";
 import { decodeOrders, decodeState, encodeOrders, encodeState } from "./codec.js";
 import { flagImage } from "./flags.js";
 import {
@@ -31,11 +31,11 @@ const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const HEARTBEAT_SECONDS = 1;
 const SEAT_RECLAIM_MS = 15000;
 const SAVE_LIFETIME_MS = 3 * 3600 * 1000;
-const HOST_SAVE_KEY = "flHost";
+const HOST_SAVE_KEY = "flHost2";
 const NAME_KEY = "flName";
 const NAME_LENGTH = 16;
 const CODE_PATTERN = /^[A-Z0-9]{4}$/;
-const GUEST_SAVE_KEY = "flGuest";
+const GUEST_SAVE_KEY = "flGuest2";
 
 export const playerId = (() => {
   let id = null;
@@ -121,7 +121,7 @@ let listingKey = null;
 export function openDirectory() {
   if (directory) return Promise.resolve(directory);
   directoryOpening ??= transportReady
-    .then((transport) => transport?.openDirectory())
+    .then((transport) => transport?.openDirectory({ browsing: () => currentScreen() === "online" }))
     .then((opened) => {
       if (!opened) return null;
       directory = opened;
@@ -248,7 +248,7 @@ export async function openRoom(code, role, resume = false) {
     seatsKey: null,
     lobbyKey: null,
     timer: 45,
-    maxTurns: 15,
+    maxTurns: DEFAULT_TURNS,
     visibility: "private",
     hostMissingFor: 0,
     offlineFor: 0,
@@ -348,7 +348,7 @@ export function renderLobby() {
       const role = id === "ai" ? "AI COMMANDER" : n === 0 ? "HOST" : "PLAYER";
       const you = id === playerId ? " · YOU" : "";
       const title = id === "ai" ? NATION_NAMES[n] : `${NATION_NAMES[n]} · ${cleanName(names[n]) || "Player"}`;
-      return seatRow(n, title, role + you);
+      return seatRow(n, title, `${NATION_TRAITS[n].name} · ${role}${you}`);
     }),
   );
 
@@ -374,7 +374,7 @@ export function renderLobby() {
   const host = hostPeer();
   const settings =
     host && host.presence.timer !== undefined
-      ? ` (${host.presence.length || 15} months, ${host.presence.timer ? `${host.presence.timer}s turns` : "no timer"})`
+      ? ` (${host.presence.length || DEFAULT_TURNS} months, ${host.presence.timer ? `${host.presence.timer}s turns` : "no timer"})`
       : "";
   $("lobby-note").textContent = host
     ? `Connected! Waiting for the host to declare war…${settings}`

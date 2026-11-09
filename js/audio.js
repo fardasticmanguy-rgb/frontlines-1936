@@ -93,6 +93,22 @@ const SOUNDS = {
   battle: () => {
     noise(0.6, 0.32, 1100);
     tone(70, 0.5, "sine", 0.22, 30);
+    for (const [delay, pitch] of [
+      [0.14, 58],
+      [0.3, 64],
+      [0.47, 52],
+    ]) {
+      noise(0.45, 0.22, 700, delay);
+      tone(pitch, 0.4, "sine", 0.16, 28, delay);
+    }
+  },
+  pact: () => arpeggio([262, 330, 392, 523], 0.11, 0.35, "triangle", 0.07),
+  news: () => {
+    for (let i = 0; i < 9; i++) tone(1400 + (i % 3) * 180, 0.018, "square", 0.018, 0, i * 0.055);
+  },
+  wind: () => {
+    noise(2.4, 0.08, 500);
+    tone(220, 2.2, "sine", 0.02, 180);
   },
   capture: () => arpeggio([392, 494, 587], 0.08, 0.18, "triangle", 0.07),
   turn: () => {

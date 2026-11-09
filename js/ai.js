@@ -1,11 +1,68 @@
-import { BUILD_COST, BUILDING, NEUTRAL } from "./config.js";
-import { defenseMultiplier, emptyOrders } from "./rules.js";
+import { BUILDING, NATIONS, NEUTRAL } from "./config.js";
+import {
+  KEEP_OFFER,
+  allyOf,
+  attackMultiplier,
+  buildCostAt,
+  canBuild,
+  defenseMultiplier,
+  divisionCount,
+  emptyOrders,
+  factoryCount,
+  isHostile,
+  provinceCount,
+  supplyNetwork,
+  victoryPoints,
+} from "./rules.js";
 
-function frontDistances(provinces, owns, mine) {
+function planDiplomacy(map, state, nation) {
+  const alive = NATIONS.filter((n) => state.alive[n]);
+  const points = NATIONS.map((n) => victoryPoints(map, state, n));
+  const power = (n) => points[n] * 3 + provinceCount(state, n) + divisionCount(state, n) * 0.25;
+  const blocPower = (n) => power(n) + (allyOf(state, n) >= 0 ? power(allyOf(state, n)) : 0);
+  const ally = allyOf(state, nation);
+  const others = alive.filter((n) => n !== nation);
+
+  if (ally >= 0) {
+    const outsiders = others.filter((n) => n !== ally);
+    const rival = Math.max(0, ...outsiders.map(blocPower));
+    const runaway = power(ally) > power(nation) * 1.6 && power(ally) > rival;
+    const threatGone = rival < Math.max(power(nation), power(ally)) * 0.8;
+    const backstab =
+      state.turn >= state.maxTurns && others.every((n) => points[nation] > points[n]) && outsiders.length > 0;
+    return { offer: KEEP_OFFER, breakAlliance: runaway || threatGone || backstab ? 1 : 0 };
+  }
+
+  const strongest = Math.max(0, ...others.map(blocPower));
+  if (strongest < power(nation) * 1.25) return { offer: NEUTRAL, breakAlliance: 0 };
+
+  const leader = others.slice().sort((a, b) => blocPower(b) - blocPower(a) || a - b)[0];
+  const free = others.filter((n) => allyOf(state, n) < 0 && n !== leader);
+  const suitor = free.find((n) => state.offers[n] === nation);
+  if (suitor !== undefined) return { offer: suitor, breakAlliance: 0 };
+  const partner = free.sort((a, b) => power(b) - power(a) || a - b)[0];
+  return { offer: partner ?? NEUTRAL, breakAlliance: 0 };
+}
+
+function encirclementGain(map, state, nation, target) {
+  const enemy = state.owner[target];
+  if (enemy === NEUTRAL) return 0;
+  const owner = state.owner.slice();
+  owner[target] = nation;
+  const before = supplyNetwork(map, state);
+  const after = supplyNetwork(map, { owner, allies: state.allies });
+  let cut = 0;
+  for (const p of map.provinces) {
+    if (owner[p.id] === enemy && before[p.id] && !after[p.id]) cut += 1 + state.troops[p.id] * 0.15;
+  }
+  return cut;
+}
+
+function frontDistances(provinces, owns, friendly, mine) {
   const distance = new Array(provinces.length).fill(Infinity);
   const queue = [];
   for (const id of mine) {
-    if (provinces[id].neighbors.some((n) => provinces[n].land && !owns(n))) {
+    if (provinces[id].neighbors.some((n) => provinces[n].land && !friendly(n))) {
       distance[id] = 1;
       queue.push(id);
     }
@@ -25,40 +82,45 @@ function frontDistances(provinces, owns, mine) {
 export function planAiOrders(map, state, nation) {
   const orders = emptyOrders();
   if (!state.alive[nation]) return orders;
+  Object.assign(orders, planDiplomacy(map, state, nation));
 
   const { provinces } = map;
   const owns = (id) => state.owner[id] === nation;
+  const friendly = (id) => owns(id) || !isHostile(state, nation, state.owner[id]);
   const mine = provinces.filter((p) => p.land && owns(p.id)).map((p) => p.id);
   const threat = (id) =>
     provinces[id].neighbors.reduce((max, n) => {
       const other = state.owner[n];
-      return provinces[n].land && other !== NEUTRAL && other !== nation
+      return provinces[n].land && other !== NEUTRAL && isHostile(state, nation, other)
         ? Math.max(max, state.troops[n])
         : max;
     }, 0);
-  const distance = frontDistances(provinces, owns, mine);
+  const distance = frontDistances(provinces, owns, friendly, mine);
   const lateGame = state.turn > state.maxTurns - 4;
   let budget = state.industry[nation];
 
   const cities = mine.filter((id) => provinces[id].city);
-  const factories = mine.filter((id) => state.buildings[id] === BUILDING.FACTORY).length;
-  const factoryTarget = state.turn < 8 ? 2 : 3;
-  if (!lateGame && factories < factoryTarget && budget >= BUILD_COST[BUILDING.FACTORY] + 4) {
+  const factories = factoryCount(state, nation);
+  const factoryTarget = state.turn < 6 ? 2 : state.turn < 10 ? 4 : 5;
+  const attack = attackMultiplier(nation, state.turn);
+  if (!lateGame && factories < factoryTarget) {
     const site = cities
-      .filter((id) => state.buildings[id] === BUILDING.NONE)
-      .sort((a, b) => distance[b] - distance[a] || a - b)[0];
-    if (site !== undefined && threat(site) <= state.troops[site]) {
+      .filter((id) => canBuild(map, state, nation, id, BUILDING.FACTORY) && threat(id) <= state.troops[id])
+      .sort((a, b) => distance[b] - distance[a] || state.factories[b] - state.factories[a] || a - b)[0];
+    const cost = site === undefined ? Infinity : buildCostAt(state, nation, site, BUILDING.FACTORY);
+    if (budget >= cost + 4) {
       orders.builds[site] = BUILDING.FACTORY;
-      budget -= BUILD_COST[BUILDING.FACTORY];
+      budget -= cost;
     }
   }
 
   for (const id of cities) {
-    if (state.buildings[id] !== BUILDING.NONE || orders.builds[id]) continue;
+    if (!canBuild(map, state, nation, id, BUILDING.FORT) || orders.builds[id]) continue;
     const exposed = threat(id) > state.troops[id] * defenseMultiplier(map, state, id);
-    if (exposed && budget >= BUILD_COST[BUILDING.FORT] + 3) {
+    const cost = buildCostAt(state, nation, id, BUILDING.FORT);
+    if (exposed && budget >= cost + 3) {
       orders.builds[id] = BUILDING.FORT;
-      budget -= BUILD_COST[BUILDING.FORT];
+      budget -= cost;
       break;
     }
   }
@@ -88,18 +150,19 @@ export function planAiOrders(map, state, nation) {
 
   const targets = new Set();
   for (const id of mine) {
-    for (const n of provinces[id].neighbors) if (provinces[n].land && !owns(n)) targets.add(n);
+    for (const n of provinces[id].neighbors) if (provinces[n].land && !friendly(n)) targets.add(n);
   }
 
   const plans = [...targets]
     .map((target) => {
       const enemy = state.owner[target] !== NEUTRAL;
       const defense = state.troops[target] * defenseMultiplier(map, state, target);
-      const need = Math.ceil(defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) + 1;
+      const need = Math.ceil((defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) / attack) + 1;
       const value =
         (provinces[target].city ? 5 : 1) +
         (provinces[target].capitalOf >= 0 ? 8 : 0) +
-        (enemy ? 1.5 : 0.5) -
+        (enemy ? 1.5 : 0.5) +
+        encirclementGain(map, state, nation, target) -
         need * 0.15;
       return { target, need, enemy, value };
     })
