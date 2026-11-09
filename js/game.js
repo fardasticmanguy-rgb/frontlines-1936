@@ -1,6 +1,6 @@
-import { planAiOrders } from "./ai.js";
+import { DIFFICULTIES, planAiOrders } from "./ai.js";
 import { playSound, unlockAudio } from "./audio.js";
-import { NATIONS, NATION_NAMES, isWinter } from "./config.js";
+import { NATIONS, NATION_NAMES } from "./config.js";
 import { generateMap } from "./map.js";
 import {
   hostBroadcast,
@@ -31,6 +31,8 @@ import {
   buildCostAt,
   canBuild,
   createInitialState,
+  relativeTurn,
+  winterActive,
   defenseStrength,
   divisionCount,
   emptyOrders,
@@ -45,8 +47,10 @@ import {
   keepAwake,
   postFeed,
   postNews,
+  factionName,
   postWorldEvent,
   renderGameOver,
+  showHandoff,
   renderPanel,
   renderTopBar,
   setBanner,
@@ -61,14 +65,18 @@ const DEMO_TURN_DELAY = 1.2;
 const freshOrders = () => NATIONS.map(emptyOrders);
 
 export function newGame(mode, seats, seed, options = {}) {
-  store.map = generateMap(seed);
+  store.map = generateMap(seed, options.mapOptions);
+  const paddedSeats = NATIONS.map((n) => seats[n] ?? { type: "ai" });
   const game = {
     mode,
-    seats,
-    state: options.state || createInitialState(store.map, options.maxTurns),
+    seats: paddedSeats,
+    mapOptions: store.map.options ?? { scenario: store.map.scenario },
+    difficulty: options.difficulty || "normal",
+    state: options.state || createInitialState(store.map, options.maxTurns, options.rules),
     orders: freshOrders(),
     ready: NATIONS.map(() => 0),
-    me: options.me ?? seats.findIndex((s) => s.type === "local"),
+    planned: NATIONS.map(() => 0),
+    me: options.me ?? paddedSeats.findIndex((s) => s.type === "local"),
     phase: "plan",
     selected: -1,
     hover: -1,
@@ -87,6 +95,12 @@ export function newGame(mode, seats, seed, options = {}) {
     panY: 0,
     pinching: false,
   };
+  if (options.factions === 0) game.state.faction = NATIONS.map(() => -1);
+  if (!options.state) {
+    const bonus = DIFFICULTIES[game.difficulty]?.bonus ?? 0;
+    game.state.bonus = NATIONS.map((n) => (paddedSeats[n].type === "ai" ? bonus : 0));
+  }
+  game.options = options;
   store.game = game;
 
   clearEffects();
@@ -104,13 +118,22 @@ export function newGame(mode, seats, seed, options = {}) {
 }
 
 export function startDemo() {
+  const nations = [4, 4, 5, 6][Math.floor(Math.random() * 4)];
   newGame(
     "demo",
     NATIONS.map(() => ({ type: "ai" })),
     randomSeed(),
-    { maxTurns: 40 },
+    { maxTurns: 40, mapOptions: { nations, size: "medium" } },
   );
   store.game.demoClock = -0.5;
+}
+
+export function localSeats(game = store.game) {
+  return NATIONS.filter((n) => game.seats[n].type === "local" && game.state.alive[n]);
+}
+
+export function isHotseat(game = store.game) {
+  return Boolean(game && game.mode !== "online" && game.mode !== "demo" && localSeats(game).length > 1);
 }
 
 export function isOnline() {
@@ -206,6 +229,28 @@ export function applyPanelAction(action, { from, to, id }) {
     case "unrecruit":
       if (orders.recruits[id] && --orders.recruits[id] <= 0) delete orders.recruits[id];
       break;
+    case "aid1":
+    case "aid5": {
+      if (orders.aidTo !== id) {
+        orders.aidTo = id;
+        orders.aidAmount = 0;
+      }
+      const wanted = action === "aid5" ? 5 : 1;
+      const count = Math.min(wanted, industryLeft());
+      if (count > 0) orders.aidAmount += count;
+      else toast("Not enough industry");
+      break;
+    }
+    case "aid-less":
+      if (orders.aidTo === id && --orders.aidAmount <= 0) {
+        orders.aidTo = -1;
+        orders.aidAmount = 0;
+      }
+      break;
+    case "aid-clear":
+      orders.aidTo = -1;
+      orders.aidAmount = 0;
+      break;
     case "diplo-offer":
       orders.offer = id;
       break;
@@ -241,7 +286,7 @@ function computeHint() {
   const game = store.game;
   const { map } = store;
   game.hint = null;
-  if (game.state.turn > 2 || game.me < 0) return;
+  if (relativeTurn(game.state) > 2 || game.me < 0) return;
 
   let bestScore = 0;
   for (const p of map.provinces) {
@@ -249,7 +294,7 @@ function computeHint() {
     for (const n of p.neighbors) {
       if (!map.provinces[n].land || game.state.owner[n] === game.me) continue;
       const score =
-        attackStrength(game.me, game.state.troops[p.id], game.state.turn) -
+        attackStrength(game.state, game.me, game.state.troops[p.id]) -
         defenseStrength(map, game.state, n) +
         (map.provinces[n].city ? 3 : 0);
       if (score > bestScore) {
@@ -265,8 +310,14 @@ export function startPlanning() {
   game.phase = "plan";
   game.orders = freshOrders();
   game.ready = NATIONS.map(() => 0);
+  game.planned = NATIONS.map(() => 0);
   game.selected = -1;
+  game.selectedNation = -1;
   game.lastTick = -1;
+  if (isHotseat(game)) {
+    game.me = localSeats(game)[0];
+    showHandoff(game.me);
+  }
   computeHint();
   if (isHost()) {
     game.deadline = game.timer ? performance.now() + game.timer * 1000 : 0;
@@ -300,6 +351,18 @@ export function endTurn() {
 
   if (!canPlan()) return;
   game.selected = -1;
+  game.selectedNation = -1;
+  game.planned[game.me] = 1;
+  const next = localSeats(game).find((n) => !game.planned[n]);
+  if (next !== undefined) {
+    game.me = next;
+    computeHint();
+    playSound("click");
+    showHandoff(next);
+    renderTopBar();
+    renderPanel();
+    return;
+  }
   resolveLocally();
 }
 
@@ -310,7 +373,7 @@ function resolveLocally() {
       map,
       game.state,
       n,
-      game.seats[n].type === "local" ? game.orders[n] : planAiOrders(map, game.state, n),
+      game.seats[n].type === "local" ? game.orders[n] : planAiOrders(map, game.state, n, game.difficulty),
     ),
   );
   runResolution(orders);
@@ -410,35 +473,56 @@ function reportAttrition(events) {
 }
 
 function reportSeason(before, after) {
-  if (isWinter(after.turn) && !isWinter(before.turn)) {
+  if (winterActive(after) && !winterActive(before)) {
     postNews("WINTER SETS IN", "Frozen roads slow every offensive. Attacks are 20% weaker until March.", -1);
     playSound("wind");
-  } else if (!isWinter(after.turn) && isWinter(before.turn)) {
+  } else if (!winterActive(after) && winterActive(before)) {
     postNews("THE THAW", "Spring returns to the front. Offensives regain their full strength.", -1);
   }
 }
 
-function reportDiplomacy(events) {
+function reportDiplomacy(animation) {
   const { game } = store;
-  const me = game.me;
+  const { events, before, after } = animation;
+  const ours = (n) => n === game.me || (game.mode !== "online" && game.seats[n]?.type === "local");
   for (const d of events.diplomacy || []) {
     const a = NATION_NAMES[d.a];
     const b = NATION_NAMES[d.b];
-    if (d.kind === "alliance") {
+    if (d.kind === "form") {
       postNews(
         `${a} AND ${b} SIGN A PACT`,
-        "The two nations will fight side by side and share their supply lines.",
+        "A new faction is born. They share supply lines and fight side by side.",
         d.a,
       );
       playSound("pact");
-    } else if (d.kind === "break") {
-      if (d.b === me)
-        postNews(`${a} BETRAYS ${b}`, `${a} has torn up the alliance. Watch your borders!`, d.a);
-      else postNews(`THE ${a}–${b} PACT IS OVER`, `${a} walks away from the alliance.`, d.a);
+    } else if (d.kind === "join") {
+      postNews(
+        `${a} JOINS THE ${factionName(after, after.faction[d.a])}`,
+        `${a} enters the war alongside ${b}.`,
+        d.a,
+      );
+      playSound("pact");
+    } else if (d.kind === "leave") {
+      const name = factionName(before, d.b);
+      const betrayed = NATIONS.filter((n) => before.faction[n] === d.b && n !== d.a && ours(n));
+      if (betrayed.length) {
+        postNews(`${a} BETRAYS THE ${name}`, `${a} has torn up the pact. Watch your borders!`, d.a);
+      } else {
+        postNews(`${a} LEAVES THE ${name}`, `${a} walks away from its allies.`, d.a);
+      }
       playSound("defeat");
-    } else if (d.kind === "offer" && d.b === me) {
-      postNews(`${a} PROPOSES AN ALLIANCE`, "Tap their flag in the top bar to accept or ignore it.", d.a);
+    } else if (d.kind === "offer" && ours(d.b)) {
+      const inFaction = before.faction[d.a] >= 0;
+      postNews(
+        inFaction
+          ? `${a} INVITES ${b} TO THE ${factionName(before, before.faction[d.a])}`
+          : `${a} PROPOSES AN ALLIANCE`,
+        `${b}: tap their flag in the top bar to accept or ignore it.`,
+        d.a,
+      );
       playSound("news");
+    } else if (d.kind === "aid" && (ours(d.a) || ours(d.b))) {
+      postFeed(`${a} sent ${d.amount} ⚙ of aid to ${b}`, d.a);
     }
   }
 }
@@ -455,10 +539,9 @@ function reportWorldEvent(event) {
   playSound("news");
 }
 
-function buildReport(animation) {
-  const { game, map } = store;
+function buildReport(animation, me) {
+  const { map } = store;
   const { before, after, events } = animation;
-  const me = game.me;
   if (me < 0 || !before.alive[me]) return null;
   return {
     gained: events.captures.filter((c) => c.to === me).length,
@@ -510,8 +593,14 @@ export function applyAnimation() {
   reportIndustry(animation);
   reportSeason(animation.before, animation.after);
   reportWorldEvent(animation.events.world);
-  reportDiplomacy(animation.events);
-  game.report = buildReport(animation);
+  reportDiplomacy(animation);
+  game.reports = Object.fromEntries(
+    NATIONS.filter((n) => n === game.me || game.seats[n].type === "local").map((n) => [
+      n,
+      buildReport(animation, n),
+    ]),
+  );
+  game.report = game.reports[game.me] ?? null;
   for (const n of NATIONS) {
     if (animation.before.alive[n] && !animation.after.alive[n]) {
       postNews(`${NATION_NAMES[n]} CAPITULATES`, `The government of ${NATION_NAMES[n]} has collapsed.`, n);
@@ -553,10 +642,11 @@ function finishAnimation() {
     game.phase = "plan";
     return;
   }
-  if (game.mode === "practice" && !game.state.alive[game.me]) {
+  if (game.mode === "practice" && !localSeats(game).length) {
     endGame();
     return;
   }
+  if (game.mode === "practice" && !game.state.alive[game.me]) game.me = localSeats(game)[0];
   playSound("turn");
   startPlanning();
 }
@@ -566,7 +656,7 @@ function runDemo(dt) {
   game.demoClock += dt;
   if (game.demoClock < DEMO_TURN_DELAY) return;
   game.demoClock = 0;
-  if (game.state.winner >= 0 || game.state.turn > 22) {
+  if (game.state.winner >= 0 || relativeTurn(game.state) > 22) {
     startDemo();
     return;
   }

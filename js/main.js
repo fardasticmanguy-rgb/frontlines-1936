@@ -42,6 +42,7 @@ import {
   toast,
   updateClock,
 } from "./ui.js";
+import { renderSetup, setupOption, startSetupGame, toggleSeat } from "./setup.js";
 import { resetZoom, resizeViewport, view } from "./view.js";
 
 const ERROR_MESSAGES = {
@@ -191,9 +192,32 @@ function showOnlineScreen() {
 
 function bindMenus() {
   on("play-online", showOnlineScreen);
-  on("practice", () =>
-    newGame("practice", [{ type: "local" }, ...NATIONS.slice(1).map(() => ({ type: "ai" }))], randomSeed()),
-  );
+  on("practice", () => {
+    renderSetup();
+    showScreen("setup");
+  });
+  on("setup-start", startSetupGame);
+  on("setup-back", () => showScreen("menu"));
+  for (const [row, key] of [
+    ["setup-scenario", "scenario"],
+    ["setup-nations", "nations"],
+    ["setup-size", "size"],
+    ["setup-difficulty", "difficulty"],
+    ["setup-length", "length"],
+    ["setup-winter", "winter"],
+    ["setup-events", "events"],
+    ["setup-factions", "factions"],
+  ]) {
+    $(row).addEventListener("click", (event) => {
+      const button = event.target.closest("button");
+      if (button) setupOption(key, button.dataset.value);
+    });
+  }
+  $("setup-seats").addEventListener("click", (event) => {
+    const seat = event.target.closest("[data-nation]");
+    if (seat) toggleSeat(Number(seat.dataset.nation));
+  });
+  on("handoff-go", () => showScreen(null));
   on("resume-game", resumeSavedGame);
   on("how-to-play", () => {
     $("help").dataset.back = "menu";
@@ -227,6 +251,10 @@ function bindMenus() {
     ["option-timer", "timer"],
     ["option-length", "maxTurns"],
     ["option-visibility", "visibility"],
+    ["option-scenario", "scenario"],
+    ["option-nations", "nations"],
+    ["option-size", "size"],
+    ["option-difficulty", "difficulty"],
   ]) {
     $(row).addEventListener("click", (event) => {
       const button = event.target.closest("button");
@@ -263,6 +291,7 @@ function bindMenus() {
         game.mode,
         game.seats.map(({ type }) => ({ type })),
         randomSeed(),
+        game.options,
       );
   });
   on("over-menu", () => {
