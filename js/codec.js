@@ -30,7 +30,13 @@ export function encodeState(state, { deadline = -1, ready = [], absent = [] } = 
   ).join(";");
   const provinces = state.owner
     .map((o, i) =>
-      [o === NEUTRAL ? UNOWNED : o, state.troops[i], state.forts[i], state.factories[i]].join(","),
+      [
+        o === NEUTRAL ? UNOWNED : o,
+        state.troops[i],
+        state.forts[i],
+        state.factories[i],
+        state.armor?.[i] ?? 0,
+      ].join(","),
     )
     .join(";");
   const e = { moves: [], battles: [], captures: [], attrition: [], world: null, diplomacy: [], ...events };
@@ -72,6 +78,7 @@ export function decodeState(text, provinceCount) {
     maxTurns: maxTurns || DEFAULT_TURNS,
     owner: [],
     troops: [],
+    armor: [],
     forts: [],
     factories: [],
     industry: [],
@@ -96,9 +103,10 @@ export function decodeState(text, provinceCount) {
   });
 
   parts[2].split(";").forEach((row, i) => {
-    const [owner, troops, fort, factory] = numbers(row);
+    const [owner, troops, fort, factory, armor] = numbers(row);
     state.owner[i] = owner === UNOWNED ? NEUTRAL : owner;
     state.troops[i] = troops;
+    state.armor[i] = Number.isInteger(armor) ? armor : 0;
     state.forts[i] = fort;
     state.factories[i] = factory;
   });
@@ -108,6 +116,7 @@ export function decodeState(text, provinceCount) {
     state.industry.length === NATIONS.length &&
     state.owner.every(isOwner) &&
     state.troops.every((t) => Number.isInteger(t) && t >= 0) &&
+    state.armor.every((a, i) => a >= 0 && a <= state.troops[i]) &&
     state.forts.every((f) => f === 0 || f === 1) &&
     state.factories.every((f) => Number.isInteger(f) && f >= 0 && f <= MAX_FACTORY_LEVEL) &&
     state.industry.every(Number.isFinite);
@@ -159,7 +168,7 @@ export function decodeState(text, provinceCount) {
 }
 
 export function encodeOrders(orders) {
-  const moves = orders.moves.map((m) => `${m.from}:${m.to}:${m.count}`).join(",");
+  const moves = orders.moves.map((m) => `${m.from}:${m.to}:${m.count}:${m.armor || 0}`).join(",");
   const recruits = Object.keys(orders.recruits)
     .map((id) => `${id}:${orders.recruits[id]}`)
     .join(",");
@@ -172,13 +181,16 @@ export function encodeOrders(orders) {
     orders.aidTo ?? NEUTRAL,
     orders.aidAmount || 0,
   ].join(":");
-  return [moves, recruits, builds, diplomacy].join("/");
+  const tanks = Object.keys(orders.tanks ?? {})
+    .map((id) => `${id}:${orders.tanks[id]}`)
+    .join(",");
+  return [moves, recruits, builds, diplomacy, tanks].join("/");
 }
 
 export function decodeOrders(text) {
   const orders = emptyOrders();
   if (typeof text !== "string") return orders;
-  const [moves, recruits, builds, diplomacy] = text.split("/");
+  const [moves, recruits, builds, diplomacy, tanks] = text.split("/");
   const rows = (section) =>
     section
       ? section
@@ -187,7 +199,10 @@ export function decodeOrders(text) {
           .filter((values) => values.every(Number.isFinite))
       : [];
 
-  for (const v of rows(moves)) if (v.length === 3) orders.moves.push({ from: v[0], to: v[1], count: v[2] });
+  for (const v of rows(moves)) {
+    if (v.length >= 3) orders.moves.push({ from: v[0], to: v[1], count: v[2], armor: v[3] || 0 });
+  }
+  for (const v of rows(tanks)) if (v.length === 2) orders.tanks[v[0]] = v[1];
   for (const v of rows(recruits)) if (v.length === 2) orders.recruits[v[0]] = v[1];
   for (const v of rows(builds)) if (v.length === 2) orders.builds[v[0]] = v[1];
   const [offer, breakAlliance, aidTo, aidAmount] = (diplomacy || "").split(":").map(Number);

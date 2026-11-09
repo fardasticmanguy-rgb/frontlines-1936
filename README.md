@@ -19,7 +19,11 @@ A four-player grand strategy game for tablets, inspired by Hearts of Iron. Every
 - World events (strikes, booms, volunteers, partisans, harvests) and a monthly report
 - Online play for up to 8 players over WebRTC, with public and private lobbies and the same map settings
 - Empty or disconnected seats are taken over by an AI; players can rejoin and hosts can resume
-- Touch-first controls: drag to attack, pinch to zoom, auto-rotating map on portrait screens
+- Production: a national production screen for infantry, tanks, forts and factories that repeats every turn, with an AUTO planner
+- Tanks: strong on open ground, weaker in forests and mountains, limited by factory level; infantry absorb casualties first
+- Redeployment: move divisions up to 4 provinces through your own land in one turn
+- AI that guards threatened fronts, shifts reserves by rail, picks a main enemy, builds tanks for offensives and test-runs its plan against predicted enemy moves before committing
+- Controls for touch and desktop: drag or right-click to order, Shift-drag box select, Ctrl-click multi-select, hover odds, undo, keyboard panning and zoom, optional map rotation on portrait screens
 
 ## How it works
 

@@ -33,6 +33,12 @@ const BLOC_SHARES = [0.6, 0.75, 0.85, 0.9];
 const ROUGH_BONUS = 0.25;
 const MAX_AID = 50;
 
+export const ARMOR_COST = 2;
+export const ARMOR_ATTACK = [3, 2, 1.25];
+export const ARMOR_DEFENSE = 1.5;
+export const ARMOR_PER_FACTORY = 2;
+export const RAIL_RANGE = 4;
+
 export const KEEP_OFFER = -2;
 export const DEFAULT_RULES = Object.freeze({ winter: 1, events: 1 });
 
@@ -40,6 +46,7 @@ export function emptyOrders() {
   return {
     moves: [],
     recruits: {},
+    tanks: {},
     builds: {},
     offer: KEEP_OFFER,
     breakAlliance: 0,
@@ -113,6 +120,7 @@ export function createInitialState(map, length = DEFAULT_TURNS, rules = DEFAULT_
     winner: -1,
     owner: new Array(count).fill(NEUTRAL),
     troops: new Array(count).fill(0),
+    armor: new Array(count).fill(0),
     forts: new Array(count).fill(0),
     factories: new Array(count).fill(0),
     industry: NATIONS.map((n) => (n < map.nationCount ? STARTING_INDUSTRY : 0)),
@@ -127,6 +135,7 @@ export function createInitialState(map, length = DEFAULT_TURNS, rules = DEFAULT_
     for (const key of ["owner", "troops", "forts", "factories", "industry", "faction"]) {
       state[key] = map.start[key].slice();
     }
+    if (map.start.armor) state.armor = map.start.armor.map((a, i) => Math.min(a, state.troops[i]));
     return state;
   }
 
@@ -179,8 +188,51 @@ export function attackMultiplier(state, nation) {
   return (hasTrait(nation, "blitz") ? BLITZ_ATTACK : 1) * (cold ? WINTER_ATTACK : 1);
 }
 
-export function attackStrength(state, nation, count) {
-  return count * attackMultiplier(state, nation);
+export function armorOf(state) {
+  if (!state.armor) state.armor = state.troops.map(() => 0);
+  return state.armor;
+}
+
+export function armorAttack(terrain = 0) {
+  return ARMOR_ATTACK[terrain] ?? 1;
+}
+
+export function attackStrength(state, nation, count, armor = 0, terrain = 0) {
+  return (count + Math.min(armor, count) * (armorAttack(terrain) - 1)) * attackMultiplier(state, nation);
+}
+
+export function maxTanks(state, id) {
+  return (state.factories[id] || 0) * ARMOR_PER_FACTORY;
+}
+
+export function railPath(map, state, nation, from, to) {
+  const { provinces } = map;
+  if (from === to || !provinces[from] || !provinces[to]) return null;
+  if (provinces[from].neighbors.includes(to)) return [from, to];
+  if (state.owner[to] !== nation) return null;
+  const previous = new Map([[from, -1]]);
+  let frontier = [from];
+  for (let step = 0; step < RAIL_RANGE && frontier.length; step++) {
+    const next = [];
+    for (const id of frontier) {
+      for (const n of provinces[id].neighbors) {
+        if (previous.has(n) || state.owner[n] !== nation || !provinces[n].land) continue;
+        previous.set(n, id);
+        if (n === to) {
+          const path = [to];
+          for (let at = id; at !== -1; at = previous.get(at)) path.unshift(at);
+          return path;
+        }
+        next.push(n);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+export function canReach(map, state, nation, from, to) {
+  return railPath(map, state, nation, from, to) !== null;
 }
 
 export function supplyNetwork(map, state) {
@@ -238,7 +290,8 @@ export function defenseMultiplier(map, state, id) {
 }
 
 export function defenseStrength(map, state, id) {
-  return state.troops[id] * defenseMultiplier(map, state, id);
+  const armor = Math.min(armorOf(state)[id], state.troops[id]);
+  return (state.troops[id] + armor * (ARMOR_DEFENSE - 1)) * defenseMultiplier(map, state, id);
 }
 
 export function income(map, state, nation) {
@@ -277,6 +330,11 @@ export function divisionCount(state, nation) {
   return state.owner.reduce((sum, o, i) => (o === nation ? sum + state.troops[i] : sum), 0);
 }
 
+export function armorCount(state, nation) {
+  const armor = armorOf(state);
+  return state.owner.reduce((sum, o, i) => (o === nation ? sum + armor[i] : sum), 0);
+}
+
 export function factoryCount(state, nation) {
   return state.owner.reduce((sum, o, i) => (o === nation ? sum + state.factories[i] : sum), 0);
 }
@@ -284,6 +342,7 @@ export function factoryCount(state, nation) {
 export function ordersCost(orders, nation, state) {
   let cost = 0;
   for (const id in orders.recruits) cost += orders.recruits[id];
+  for (const id in orders.tanks ?? {}) cost += orders.tanks[id] * ARMOR_COST;
   for (const id in orders.builds) cost += buildCostAt(state, nation, id, orders.builds[id]);
   return cost + (orders.aidTo >= 0 ? orders.aidAmount || 0 : 0);
 }
@@ -314,18 +373,34 @@ export function sanitizeOrders(map, state, nation, orders) {
     clean.recruits[id] = count;
   }
 
-  const committed = {};
+  for (const key in orders.tanks || {}) {
+    const id = Number(key);
+    if (!owns(id) || !provinces[id].city) continue;
+    const affordable = Math.floor(budget / ARMOR_COST);
+    const count = Math.min(Math.floor(Number(orders.tanks[key]) || 0), affordable, maxTanks(state, id));
+    if (count <= 0) continue;
+    budget -= count * ARMOR_COST;
+    clean.tanks[id] = count;
+  }
+
+  const armor = armorOf(state);
+  const usedInfantry = {};
+  const usedArmor = {};
   for (const move of orders.moves || []) {
     const from = Math.floor(Number(move.from));
     const to = Math.floor(Number(move.to));
     if (!owns(from) || !provinces[to] || !provinces[to].land) continue;
     if (areAllied(state, nation, state.owner[to])) continue;
-    if (!provinces[from].neighbors.includes(to)) continue;
-    const free = state.troops[from] - (committed[from] || 0);
-    const count = Math.min(Math.floor(Number(move.count) || 0), free);
-    if (count <= 0) continue;
-    committed[from] = (committed[from] || 0) + count;
-    clean.moves.push({ from, to, count });
+    if (!canReach(map, state, nation, from, to)) continue;
+    const freeArmor = armor[from] - (usedArmor[from] || 0);
+    const freeInfantry = state.troops[from] - armor[from] - (usedInfantry[from] || 0);
+    const wanted = Math.max(0, Math.floor(Number(move.count) || 0));
+    const tanks = Math.max(0, Math.min(Math.floor(Number(move.armor) || 0), freeArmor, wanted));
+    const infantry = Math.min(wanted - tanks, freeInfantry);
+    if (tanks + infantry <= 0) continue;
+    usedArmor[from] = (usedArmor[from] || 0) + tanks;
+    usedInfantry[from] = (usedInfantry[from] || 0) + infantry;
+    clean.moves.push({ from, to, count: tanks + infantry, armor: tanks });
   }
 
   const offer = Math.floor(Number(orders.offer ?? KEEP_OFFER));
@@ -348,24 +423,39 @@ function survivorsOf(count, strength, enemyStrength) {
   return Math.min(count, Math.max(1, Math.ceil((strength - enemyStrength) / perTroop - 1e-9)));
 }
 
+function shareArmor(armor, count, survivors) {
+  if (count <= 0 || survivors <= 0) return 0;
+  const lost = Math.round(((count - survivors) * armor * 0.5) / count);
+  return Math.max(0, Math.min(survivors, armor - lost));
+}
+
 function settleHeadOnClashes(moves, state) {
   for (const a of moves) {
     for (const b of moves) {
       if (a === b || a.nation === b.nation || a.count <= 0 || b.count <= 0) continue;
       if (a.from !== b.to || a.to !== b.from) continue;
-      const sa = attackStrength(state, a.nation, a.count);
-      const sb = attackStrength(state, b.nation, b.count);
-      a.count = survivorsOf(a.count, sa, sb);
-      b.count = survivorsOf(b.count, sb, sa);
+      const sa = attackStrength(state, a.nation, a.count, a.armor);
+      const sb = attackStrength(state, b.nation, b.count, b.armor);
+      const ca = survivorsOf(a.count, sa, sb);
+      const cb = survivorsOf(b.count, sb, sa);
+      a.armor = shareArmor(a.armor, a.count, ca);
+      b.armor = shareArmor(b.armor, b.count, cb);
+      a.count = ca;
+      b.count = cb;
       if (a.count === 0) a.stop = 0.5;
       if (b.count === 0) b.stop = 0.5;
     }
   }
 }
 
-function fightBattles(map, state, moves, owner, troops) {
+function fightBattles(map, state, moves, owner, troops, armor) {
   const incoming = map.provinces.map(() => NATIONS.map(() => 0));
-  for (const m of moves) if (m.count > 0) incoming[m.to][m.nation] += m.count;
+  const incomingArmor = map.provinces.map(() => NATIONS.map(() => 0));
+  for (const m of moves) {
+    if (m.count <= 0) continue;
+    incoming[m.to][m.nation] += m.count;
+    incomingArmor[m.to][m.nation] += m.armor;
+  }
 
   const battles = [];
   const captures = [];
@@ -377,15 +467,17 @@ function fightBattles(map, state, moves, owner, troops) {
     const multiplier = defenseMultiplier(map, state, id);
 
     const sides = new Map();
-    const join = (side, nation, count, strength) => {
+    const join = (side, nation, count, strength, tanks) => {
       const entry = sides.get(side) ?? {
         count: 0,
+        armor: 0,
         strength: 0,
         lead: nation,
         leadStrength: -1,
         holder: false,
       };
       entry.count += count;
+      entry.armor += tanks;
       entry.strength += strength;
       if (strength > entry.leadStrength) {
         entry.lead = nation;
@@ -395,17 +487,24 @@ function fightBattles(map, state, moves, owner, troops) {
       sides.set(side, entry);
     };
     for (const nation of NATIONS) {
-      const count = incoming[id][nation] + (nation === holder ? troops[id] : 0);
+      const home = nation === holder;
+      const count = incoming[id][nation] + (home ? troops[id] : 0);
       if (count <= 0) continue;
-      const strength = nation === holder ? count * multiplier : attackStrength(state, nation, count);
+      const tanks = Math.min(count, incomingArmor[id][nation] + (home ? armor[id] : 0));
+      const strength = home
+        ? (count + tanks * (ARMOR_DEFENSE - 1)) * multiplier
+        : attackStrength(state, nation, count, tanks, p.terrain);
       const side = factionOf(state, nation);
-      join(side >= 0 ? `f${side}` : `n${nation}`, nation, count, strength);
+      join(side >= 0 ? `f${side}` : `n${nation}`, nation, count, strength, tanks);
     }
-    if (holder === NEUTRAL && troops[id] > 0) join("neutral", NEUTRAL, troops[id], troops[id] * multiplier);
+    if (holder === NEUTRAL && troops[id] > 0) {
+      join("neutral", NEUTRAL, troops[id], troops[id] * multiplier, 0);
+    }
 
     const forces = [...sides.values()].map((side) => ({
       nation: side.holder ? holder : side.lead,
       count: side.count,
+      armor: side.armor,
       strength: side.strength,
     }));
     if (forces.length === 1) {
@@ -413,6 +512,7 @@ function fightBattles(map, state, moves, owner, troops) {
       if (victor.nation !== holder) captures.push({ province: id, from: holder, to: victor.nation });
       owner[id] = victor.nation;
       troops[id] = victor.count;
+      armor[id] = victor.armor;
       continue;
     }
 
@@ -422,11 +522,13 @@ function fightBattles(map, state, moves, owner, troops) {
     const survivors = survivorsOf(victor.count, victor.strength, runnerUp.strength);
     if (survivors === 0) {
       troops[id] = 0;
+      armor[id] = 0;
       continue;
     }
     if (victor.nation !== holder) captures.push({ province: id, from: holder, to: victor.nation });
     owner[id] = victor.nation;
     troops[id] = survivors;
+    armor[id] = shareArmor(victor.armor, victor.count, survivors);
   }
   return { battles, captures };
 }
@@ -536,6 +638,7 @@ function resolveDiplomacy(map, state, next, ordersByNation) {
 export function resolveTurn(map, state, ordersByNation) {
   const owner = state.owner.slice();
   const troops = state.troops.slice();
+  const armor = armorOf(state).slice();
   const forts = state.forts.slice();
   const factories = state.factories.slice();
   const industry = state.industry.slice();
@@ -545,13 +648,15 @@ export function resolveTurn(map, state, ordersByNation) {
     const orders = ordersByNation[nation];
     if (!orders || !state.alive[nation]) continue;
     for (const m of orders.moves) {
+      const tanks = Math.min(m.armor || 0, m.count);
       troops[m.from] -= m.count;
-      moves.push({ nation, from: m.from, to: m.to, count: m.count, sent: m.count, stop: 1 });
+      armor[m.from] -= tanks;
+      moves.push({ nation, from: m.from, to: m.to, count: m.count, armor: tanks, sent: m.count, stop: 1 });
     }
   }
 
   settleHeadOnClashes(moves, state);
-  const { battles, captures } = fightBattles(map, state, moves, owner, troops);
+  const { battles, captures } = fightBattles(map, state, moves, owner, troops, armor);
   for (const c of captures) if (factories[c.province] > 0) factories[c.province]--;
 
   for (const nation of NATIONS) {
@@ -569,6 +674,13 @@ export function resolveTurn(map, state, ordersByNation) {
       const id = Number(key);
       industry[nation] -= orders.recruits[key];
       if (owner[id] === nation) troops[id] += orders.recruits[key];
+    }
+    for (const key in orders.tanks ?? {}) {
+      const id = Number(key);
+      industry[nation] -= orders.tanks[key] * ARMOR_COST;
+      if (owner[id] !== nation) continue;
+      troops[id] += orders.tanks[key];
+      armor[id] += orders.tanks[key];
     }
   }
 
@@ -590,7 +702,9 @@ export function resolveTurn(map, state, ordersByNation) {
   for (const p of map.provinces) {
     if (!p.land || supplied[p.id] || troops[p.id] <= 0) continue;
     const lost = Math.max(1, Math.floor(troops[p.id] / 4));
+    armor[p.id] -= Math.min(armor[p.id], Math.round((armor[p.id] * lost) / troops[p.id]));
     troops[p.id] -= lost;
+    armor[p.id] = Math.min(armor[p.id], troops[p.id]);
     attrition.push({ province: p.id, lost });
   }
 
@@ -601,6 +715,7 @@ export function resolveTurn(map, state, ordersByNation) {
     winner: -1,
     owner,
     troops,
+    armor,
     forts,
     factories,
     industry,
@@ -684,6 +799,7 @@ function rollWorldEvent(map, next) {
     const province = spots[Math.floor(rng() * spots.length)].id;
     const amount = Math.ceil(next.troops[province] / 2);
     next.troops[province] -= amount;
+    armorOf(next)[province] = Math.min(next.armor[province], next.troops[province]);
     return { kind, nation: leader, province, amount };
   }
   for (const n of alive) next.industry[n] += 2;

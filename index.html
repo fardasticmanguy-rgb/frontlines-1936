@@ -185,8 +185,17 @@
         <div class="rules">
           <p>• Everyone plans at the same time, then <b>all orders happen at once</b>.</p>
           <p>
-            • <b>Drag</b> from your land onto a neighboring province to send divisions. Tap your province to
-            change how many go.
+            • <b>Drag</b> from your province onto a target to send every free division there. On a computer
+            you can also <b>click</b> your province and <b>right-click</b> the target (Shift + right-click
+            sends half). Tap your province to fine-tune the count with − / + / ½ / ALL.
+          </p>
+          <p>
+            • <b>Attack</b> any neighboring province, or <b>redeploy</b> up to 4 provinces through your own
+            land in a single turn. Blue arrows are redeployments, red arrows are attacks.
+          </p>
+          <p>
+            • <b>Select many:</b> Shift-drag a box or Ctrl-click provinces, then right-click (or tap) a target
+            to send them all at once.
           </p>
           <p>
             • <b>No dice.</b> The bigger army wins and keeps the difference. Defenders get bonuses:
@@ -220,17 +229,29 @@
           </p>
           <p>• World events like strikes, booms and partisan uprisings can shake up the war.</p>
           <p>
-            • Each turn you earn <b>⚙ industry</b>. Spend it in your cities: <b>train divisions</b> (1 ⚙ each,
-            ready next turn), build a <b>fort</b> (6) or a <b>factory</b>. Factories upgrade up to
-            <b>level 3</b> (8 / 12 / 16 ⚙) and each level yields <b>+3 ⚙</b> every turn. A captured factory
-            loses a level, so raid your enemy's industry!
+            • Each turn you earn <b>⚙ industry</b>. Open <b>🏭 PRODUCE</b> (or press P) to spend it across all
+            your cities: <b>infantry</b> (1 ⚙), <b>tanks</b> (2 ⚙), <b>forts</b> (6) and <b>factories</b>.
+            Your production repeats every turn until you change it; <b>AUTO</b> fills it for you.
+          </p>
+          <p>
+            • <b>Tanks</b> 🛡 hit ×3 on plains, ×2 in forests and ×1.25 in mountains, but defend at only ×1.5.
+            Infantry soak up casualties first. Each factory level lets a city build 2 tanks per turn.
+          </p>
+          <p>
+            • Factories upgrade up to <b>level 3</b> (8 / 12 / 16 ⚙) and each level yields <b>+3 ⚙</b> every
+            turn. A captured factory loses a level, so raid your enemy's industry!
           </p>
           <p>
             • Cities ■ are worth 1 victory point and capitals ★ are worth 3. Hit the VP goal, be the last
             nation left, or lead when the final month ends.
           </p>
           <p>
-            • <b>Pinch</b> to zoom and drag with <b>two fingers</b> to move the map. Tap ⤢ to zoom back out.
+            • <b>Pinch</b> or scroll to zoom. Drag empty map (or right/middle-drag, or two fingers) to pan.
+            Tap ⤢ or press F to zoom back out.
+          </p>
+          <p>
+            • <b>Keys:</b> WASD / arrows pan · Q / E zoom · Space ends the turn · Z or Ctrl+Z undo · X clears
+            the selected orders · P production · Esc deselects.
           </p>
         </div>
         <button class="btn go" id="help-close">GOT IT</button>
@@ -256,6 +277,7 @@
         <button class="btn" id="pause-resume">BACK TO THE WAR</button>
         <button class="btn small" id="pause-help">HOW TO PLAY</button>
         <button class="btn small" id="pause-sound">SOUND: ON</button>
+        <button class="btn small" id="pause-rotate">ROTATE ON PORTRAIT: OFF</button>
         <button class="btn red" id="pause-quit">LEAVE GAME</button>
       </div>
     </section>
@@ -273,6 +295,9 @@
         <div id="clock"></div>
       </div>
       <div id="nations"></div>
+      <button class="icon-button labelled" id="production-button" aria-label="Production">
+        🏭<small>PRODUCE</small>
+      </button>
       <button id="end-turn">END TURN</button>
       <button class="icon-button" id="menu-button" aria-label="Menu">☰</button>
     </header>
@@ -287,6 +312,7 @@
     </div>
     <div id="banner" hidden></div>
     <div id="toast" hidden></div>
+    <div id="tip" hidden></div>
     <button class="icon-button" id="fit-button" aria-label="Zoom out" hidden>⤢</button>
   </body>
 </html>

@@ -4,7 +4,10 @@ import { planAiOrders } from "../js/ai.js";
 import { BUILDING, NATIONS, NEUTRAL, SUPPLY_DEFENSE, dateOf, isWinter } from "../js/config.js";
 import { generateMap } from "../js/map.js";
 import {
+  RAIL_RANGE,
   WORLD_EVENTS,
+  attackStrength,
+  canReach,
   areAllied,
   attackMultiplier,
   relativeTurn,
@@ -428,6 +431,87 @@ describe("full games", () => {
       const b = resolveTurn(gameMap, state, orders);
       assert.deepEqual(a, b);
       state = a.state;
+    }
+  });
+});
+
+describe("tanks and redeployment", () => {
+  test("tanks hit hardest on open ground", () => {
+    const state = blankState();
+    assert.ok(attackStrength(state, 1, 4, 4, 0) > attackStrength(state, 1, 4, 4, 1));
+    assert.ok(attackStrength(state, 1, 4, 4, 1) > attackStrength(state, 1, 4, 4, 2));
+    assert.ok(attackStrength(state, 1, 4, 4, 0) > attackStrength(state, 1, 8, 0, 0));
+  });
+
+  test("a tank-led attack breaks a line that infantry alone cannot", () => {
+    const infantryOnly = frontline(1, 6, 3, 6);
+    const { state: held } = resolveTurn(map, infantryOnly, ordersFor({ 1: move(home, front, 6) }));
+    assert.equal(held.owner[front], 3);
+
+    const armored = frontline(1, 6, 3, 6);
+    armored.armor[home] = 4;
+    const orders = sanitizeOrders(map, armored, 1, {
+      ...emptyOrders(),
+      moves: [{ from: home, to: front, count: 6, armor: 4 }],
+    });
+    const { state: taken } = resolveTurn(map, armored, ordersFor({ 1: orders }));
+    assert.equal(taken.owner[front], 1);
+    assert.ok(taken.armor[front] >= 1 && taken.armor[front] <= taken.troops[front]);
+  });
+
+  test("tanks need a factory and cost two industry each", () => {
+    const state = blankState();
+    state.owner[home] = 1;
+    state.industry[1] = 9;
+    const ask = { ...emptyOrders(), tanks: { [home]: 5 } };
+    assert.deepEqual(sanitizeOrders(map, state, 1, ask).tanks, {});
+    state.factories[home] = 1;
+    const clean = sanitizeOrders(map, state, 1, ask);
+    assert.deepEqual(clean.tanks, { [home]: 2 });
+    const { state: next } = resolveTurn(map, state, ordersFor({ 1: clean }));
+    assert.equal(next.armor[home], 2);
+    assert.equal(next.troops[home], 2);
+  });
+
+  test("divisions redeploy through friendly land but not past the rail range", () => {
+    const state = blankState();
+    const path = [provinces.find((p) => p.land && p.id !== home && p.id !== front).id];
+    while (path.length < RAIL_RANGE + 2) {
+      const last = provinces[path[path.length - 1]];
+      const next = last.neighbors.find(
+        (n) =>
+          provinces[n].land &&
+          !path.includes(n) &&
+          path.every((id, k) => k === path.length - 1 || !provinces[id].neighbors.includes(n)),
+      );
+      if (next === undefined) break;
+      path.push(next);
+    }
+    assert.ok(path.length >= RAIL_RANGE + 1);
+    for (const id of path) {
+      state.owner[id] = 1;
+      state.troops[id] = 1;
+    }
+    state.troops[path[0]] = 7;
+    const far = path[RAIL_RANGE];
+    assert.ok(canReach(map, state, 1, path[0], far));
+    const orders = sanitizeOrders(map, state, 1, {
+      ...emptyOrders(),
+      moves: [{ from: path[0], to: far, count: 7 }],
+    });
+    assert.equal(orders.moves.length, 1);
+    const { state: next } = resolveTurn(map, state, ordersFor({ 1: orders }));
+    assert.equal(next.troops[far], 8);
+
+    state.owner[path[1]] = 3;
+    const blocked = sanitizeOrders(map, state, 1, {
+      ...emptyOrders(),
+      moves: [{ from: path[0], to: far, count: 7 }],
+    });
+    assert.equal(blocked.moves.length, 0);
+    if (path.length > RAIL_RANGE + 1) {
+      state.owner[path[1]] = 1;
+      assert.ok(!canReach(map, state, 1, path[0], path[RAIL_RANGE + 1]));
     }
   });
 });

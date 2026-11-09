@@ -11,6 +11,8 @@ test("state survives an encode/decode round trip", () => {
   state.faction = [0, -1, -1, 0, -1, -1, -1, -1];
   state.offers = [-1, 2, -1, -1, -1, -1, -1, -1];
   state.rules = { winter: 0, events: 1 };
+  state.troops[3] = 6;
+  state.armor[3] = 2;
   const text = encodeState(state, { deadline: 30, ready: [1, 0, 1, 0], absent: [0, 0, 1, 0] });
   const decoded = decodeState(text, map.provinces.length);
   assert.deepEqual(decoded.state, state);
@@ -48,8 +50,9 @@ test("malformed or tampered state is rejected", () => {
 
 test("orders survive an encode/decode round trip", () => {
   const orders = {
-    moves: [{ from: 3, to: 7, count: 5 }],
+    moves: [{ from: 3, to: 7, count: 5, armor: 2 }],
     recruits: { 12: 4 },
+    tanks: { 12: 1 },
     builds: { 12: 2 },
     offer: 2,
     breakAlliance: 1,
