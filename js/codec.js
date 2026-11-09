@@ -1,5 +1,5 @@
 import { DEFAULT_TURNS, NATIONS, NEUTRAL } from "./config.js";
-import { WORLD_EVENTS, emptyOrders } from "./rules.js";
+import { MAX_FACTORY_LEVEL, WORLD_EVENTS, emptyOrders } from "./rules.js";
 
 const UNOWNED = 9;
 
@@ -11,7 +11,9 @@ export function encodeState(state, { deadline = -1, ready = [], absent = [] } = 
     [state.industry[n], state.alive[n], ready[n] ? 1 : 0, absent[n] ? 1 : 0].join(","),
   ).join(";");
   const provinces = state.owner
-    .map((o, i) => [o === NEUTRAL ? UNOWNED : o, state.troops[i], state.buildings[i]].join(","))
+    .map((o, i) =>
+      [o === NEUTRAL ? UNOWNED : o, state.troops[i], state.forts[i], state.factories[i]].join(","),
+    )
     .join(";");
   const e = { moves: [], battles: [], captures: [], attrition: [], world: null, ...events };
   const moves = e.moves.map((m) => [m.nation, m.from, m.to, m.sent, m.stop < 1 ? 1 : 0].join(",")).join(";");
@@ -46,7 +48,8 @@ export function decodeState(text, provinceCount) {
     maxTurns: maxTurns || DEFAULT_TURNS,
     owner: [],
     troops: [],
-    buildings: [],
+    forts: [],
+    factories: [],
     industry: [],
     alive: [],
   };
@@ -62,10 +65,11 @@ export function decodeState(text, provinceCount) {
   });
 
   parts[2].split(";").forEach((row, i) => {
-    const [owner, troops, building] = numbers(row);
+    const [owner, troops, fort, factory] = numbers(row);
     state.owner[i] = owner === UNOWNED ? NEUTRAL : owner;
     state.troops[i] = troops;
-    state.buildings[i] = building;
+    state.forts[i] = fort;
+    state.factories[i] = factory;
   });
 
   const valid =
@@ -73,7 +77,8 @@ export function decodeState(text, provinceCount) {
     state.industry.length === NATIONS.length &&
     state.owner.every(isOwner) &&
     state.troops.every((t) => Number.isInteger(t) && t >= 0) &&
-    state.buildings.every((b) => b === 0 || b === 1 || b === 2) &&
+    state.forts.every((f) => f === 0 || f === 1) &&
+    state.factories.every((f) => Number.isInteger(f) && f >= 0 && f <= MAX_FACTORY_LEVEL) &&
     state.industry.every(Number.isFinite);
   if (!valid) return null;
 

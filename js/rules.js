@@ -19,6 +19,9 @@ const CAPITAL_GARRISON = 8;
 const BORDERLAND_GARRISON = 3;
 const VICTORY_SHARE = 0.6;
 const MAX_RECRUITS = 99;
+const FACTORY_COSTS = [8, 12, 16];
+export const MAX_FACTORY_LEVEL = 3;
+export const FACTORY_OUTPUT = 3;
 const BLITZ_ATTACK = 1.1;
 const FORTRESS_FORT_BONUS = 0.75;
 const FORTRESS_CITY_BONUS = 0.5;
@@ -40,7 +43,8 @@ export function createInitialState(map, maxTurns = DEFAULT_TURNS) {
     winner: -1,
     owner: new Array(count).fill(NEUTRAL),
     troops: new Array(count).fill(0),
-    buildings: new Array(count).fill(BUILDING.NONE),
+    forts: new Array(count).fill(0),
+    factories: new Array(count).fill(0),
     industry: NATIONS.map(() => STARTING_INDUSTRY),
     alive: NATIONS.map(() => 1),
   };
@@ -66,10 +70,23 @@ export function createInitialState(map, maxTurns = DEFAULT_TURNS) {
   return state;
 }
 
-export function buildCost(nation, kind) {
-  if (kind === BUILDING.FACTORY && hasTrait(nation, "industry")) return 7;
-  if (kind === BUILDING.FORT && hasTrait(nation, "fortress")) return 4;
-  return BUILD_COST[kind];
+export function buildCost(nation, kind, level = 0) {
+  if (kind === BUILDING.FACTORY) {
+    return FACTORY_COSTS[Math.min(level, MAX_FACTORY_LEVEL - 1)] - (hasTrait(nation, "industry") ? 2 : 0);
+  }
+  return hasTrait(nation, "fortress") ? 4 : BUILD_COST[kind];
+}
+
+export function buildCostAt(state, nation, id, kind) {
+  return buildCost(nation, kind, state.factories[id]);
+}
+
+export function canBuild(map, state, nation, id, kind) {
+  const p = map.provinces[id];
+  if (!p || !p.city || state.owner[id] !== nation) return false;
+  if (kind === BUILDING.FORT) return !state.forts[id];
+  if (kind === BUILDING.FACTORY) return state.factories[id] < MAX_FACTORY_LEVEL;
+  return false;
 }
 
 export function fortBonus(nation) {
@@ -117,12 +134,12 @@ export function isSupplied(map, state, id) {
   return supplyNetwork(map, state)[id] === 1;
 }
 
-export function defenseMultiplier(map, state, id, building = state.buildings[id]) {
+export function defenseMultiplier(map, state, id) {
   const p = map.provinces[id];
   const holder = state.owner[id];
   const base =
     TERRAIN_DEFENSE[p.terrain] +
-    (building === BUILDING.FORT ? fortBonus(holder) : 0) +
+    (state.forts[id] ? fortBonus(holder) : 0) +
     (p.capitalOf >= 0 ? CAPITAL_BONUS : 0) +
     (p.city && hasTrait(holder, "fortress") ? FORTRESS_CITY_BONUS : 0);
   return holder !== NEUTRAL && !isSupplied(map, state, id) ? base * SUPPLY_DEFENSE : base;
@@ -142,9 +159,9 @@ export function income(map, state, nation) {
     provinces++;
     if (p.capitalOf >= 0) capitals++;
     else if (p.city) cities++;
-    if (state.buildings[p.id] === BUILDING.FACTORY) factories++;
+    factories += state.factories[p.id];
   }
-  return 2 + Math.floor(provinces / 2) + 2 * cities + 4 * capitals + 3 * factories;
+  return 2 + Math.floor(provinces / 2) + 2 * cities + 4 * capitals + FACTORY_OUTPUT * factories;
 }
 
 export function victoryPoints(map, state, nation) {
@@ -168,13 +185,13 @@ export function divisionCount(state, nation) {
 }
 
 export function factoryCount(state, nation) {
-  return state.owner.filter((o, i) => o === nation && state.buildings[i] === BUILDING.FACTORY).length;
+  return state.owner.reduce((sum, o, i) => (o === nation ? sum + state.factories[i] : sum), 0);
 }
 
-export function ordersCost(orders, nation) {
+export function ordersCost(orders, nation, state) {
   let cost = 0;
   for (const id in orders.recruits) cost += orders.recruits[id];
-  for (const id in orders.builds) cost += buildCost(nation, orders.builds[id]);
+  for (const id in orders.builds) cost += buildCostAt(state, nation, id, orders.builds[id]);
   return cost;
 }
 
@@ -188,10 +205,10 @@ export function sanitizeOrders(map, state, nation, orders) {
   for (const key in orders.builds || {}) {
     const id = Number(key);
     const kind = Number(orders.builds[key]);
-    if (!owns(id) || !provinces[id].city || state.buildings[id] !== BUILDING.NONE) continue;
-    if (kind !== BUILDING.FORT && kind !== BUILDING.FACTORY) continue;
-    if (budget < buildCost(nation, kind)) continue;
-    budget -= buildCost(nation, kind);
+    if (!canBuild(map, state, nation, id, kind)) continue;
+    const cost = buildCostAt(state, nation, id, kind);
+    if (budget < cost) continue;
+    budget -= cost;
     clean.builds[id] = kind;
   }
 
@@ -311,7 +328,8 @@ function decideWinner(map, next) {
 export function resolveTurn(map, state, ordersByNation) {
   const owner = state.owner.slice();
   const troops = state.troops.slice();
-  const buildings = state.buildings.slice();
+  const forts = state.forts.slice();
+  const factories = state.factories.slice();
   const industry = state.industry.slice();
 
   const moves = [];
@@ -326,14 +344,18 @@ export function resolveTurn(map, state, ordersByNation) {
 
   settleHeadOnClashes(moves, state.turn);
   const { battles, captures } = fightBattles(map, state, moves, owner, troops);
+  for (const c of captures) if (factories[c.province] > 0) factories[c.province]--;
 
   for (const nation of NATIONS) {
     const orders = ordersByNation[nation];
     if (!orders || !state.alive[nation]) continue;
     for (const key in orders.builds) {
       const id = Number(key);
-      industry[nation] -= buildCost(nation, orders.builds[key]);
-      if (owner[id] === nation && buildings[id] === BUILDING.NONE) buildings[id] = orders.builds[key];
+      const kind = orders.builds[key];
+      industry[nation] -= buildCostAt(state, nation, id, kind);
+      if (owner[id] !== nation) continue;
+      if (kind === BUILDING.FORT) forts[id] = 1;
+      else if (kind === BUILDING.FACTORY) factories[id] = Math.min(MAX_FACTORY_LEVEL, factories[id] + 1);
     }
     for (const key in orders.recruits) {
       const id = Number(key);
@@ -362,7 +384,8 @@ export function resolveTurn(map, state, ordersByNation) {
     winner: -1,
     owner,
     troops,
-    buildings,
+    forts,
+    factories,
     industry,
     alive: NATIONS.map(() => 0),
   };

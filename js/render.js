@@ -502,36 +502,47 @@ function drawCityMarker(p) {
   drawText(p.name.toUpperCase(), 0, -29, `600 10.5px ${FONT}`, p.capitalOf >= 0 ? "#ffe7a3" : "#f4eedb");
 }
 
-function drawBuilding(kind) {
+function drawFort() {
   ctx.strokeStyle = "#14130e";
   ctx.lineWidth = 1;
-  if (kind === BUILDING.FORT) {
-    ctx.fillStyle = "#b9b6a8";
-    ctx.beginPath();
-    ctx.rect(-31, -1, 9, 8);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#14130e";
-    ctx.fillRect(-29.5, 2, 6, 1.6);
-  } else if (kind === BUILDING.FACTORY) {
-    ctx.fillStyle = "#d8c08a";
-    ctx.beginPath();
-    for (const [x, y] of [
-      [22, 8],
-      [22, 1],
-      [25, 3],
-      [25, 1],
-      [28, 3],
-      [28, -4],
-      [30.5, -4],
-      [30.5, 8],
-    ]) {
-      ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+  ctx.fillStyle = "#b9b6a8";
+  ctx.beginPath();
+  ctx.rect(-31, -1, 9, 8);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#14130e";
+  ctx.fillRect(-29.5, 2, 6, 1.6);
+}
+
+function drawFactory(level, time) {
+  const width = 4 + level * 5;
+  ctx.strokeStyle = "#14130e";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#d8c08a";
+  ctx.beginPath();
+  ctx.moveTo(22, 8);
+  for (let k = 0; k < level; k++) {
+    const x = 22 + k * 5;
+    ctx.lineTo(x, 3);
+    ctx.lineTo(x + 2.4, 1);
+    ctx.lineTo(x + 2.4, -5 - k);
+    ctx.lineTo(x + 4.6, -5 - k);
+    ctx.lineTo(x + 4.6, 3);
   }
+  ctx.lineTo(22 + width, 3);
+  ctx.lineTo(22 + width, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  for (let k = 0; k < level; k++) {
+    const phase = (time * 0.45 + k * 0.37) % 1;
+    ctx.globalAlpha = 0.5 * (1 - phase);
+    ctx.fillStyle = "#e8e2d2";
+    ctx.beginPath();
+    ctx.arc(22 + k * 5 + 3.5 + phase * 3, -7 - k - phase * 9, 1.4 + phase * 2.4, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawSwords(x, y, size) {
@@ -816,6 +827,7 @@ function drawSelection(game, map, state, paths) {
 }
 
 function drawProvinceMarkers(map, state) {
+  const time = performance.now() / 1000;
   for (const p of map.provinces) {
     if (!p.land || !p.city) continue;
     upright(ctx, p.x, p.y);
@@ -826,7 +838,8 @@ function drawProvinceMarkers(map, state) {
     if (!p.land) continue;
     upright(ctx, p.x, p.y);
     drawCounter(0, 3, state.troops[p.id], state.owner[p.id]);
-    drawBuilding(state.buildings[p.id]);
+    if (state.forts[p.id]) drawFort();
+    if (state.factories[p.id]) drawFactory(state.factories[p.id], time);
     ctx.restore();
   }
 }
@@ -848,7 +861,7 @@ function drawOrders(game, map, state) {
   for (const id in orders.builds) {
     const p = map.provinces[id];
     upright(ctx, p.x, p.y);
-    const label = orders.builds[id] === BUILDING.FORT ? "FORT ⚒" : "FACTORY ⚒";
+    const label = orders.builds[id] === BUILDING.FORT ? "FORT ⚒" : `FACTORY L${state.factories[id] + 1} ⚒`;
     drawText(label, 0, 31, `600 10px ${FONT}`, GOLD);
     ctx.restore();
   }

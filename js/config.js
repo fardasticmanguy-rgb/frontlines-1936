@@ -23,7 +23,7 @@ export const SUPPLY_DEFENSE = 0.75;
 
 export const NATION_TRAITS = [
   { kind: "blitz", name: "BLITZKRIEG", text: "Attacking divisions strike 10% harder" },
-  { kind: "industry", name: "INDUSTRIAL BASE", text: "Factories cost 7 instead of 10" },
+  { kind: "industry", name: "INDUSTRIAL BASE", text: "Factories and upgrades cost 2 less" },
   {
     kind: "mobilization",
     name: "MASS MOBILIZATION",

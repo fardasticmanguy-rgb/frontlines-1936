@@ -12,8 +12,10 @@ import {
 import { flagImage, flagUrls } from "./flags.js";
 import { applyPanelAction, availableFrom, canPlan, industryLeft, isGuest, isOnline } from "./game.js";
 import {
+  FACTORY_OUTPUT,
   attackStrength,
-  buildCost,
+  buildCostAt,
+  canBuild,
   defenseMultiplier,
   defenseStrength,
   divisionCount,
@@ -174,7 +176,7 @@ export function renderTopBar() {
     $("nation-name").textContent = NATION_NAMES[me];
     const industry = canPlan() ? industryLeft() : state.industry[me];
     $("stat-industry").innerHTML = `⚙ ${industry} <b>+${income(map, state, me)}</b><small>INDUSTRY</small>`;
-    $("stat-factories").innerHTML = `🏭 ${factoryCount(state, me)}<small>FACTORIES</small>`;
+    $("stat-factories").innerHTML = `🏭 ${factoryCount(state, me)}<small>FACTORY LV</small>`;
     $("stat-victory").innerHTML =
       `★ ${victoryPoints(map, state, me)}/${victoryGoal(map)}<small>VICTORY PTS</small>`;
   } else {
@@ -294,8 +296,10 @@ function overviewPanel(game, map) {
 function provinceInfo(map, state, id) {
   const p = map.provinces[id];
   const owner = state.owner[id];
+  const level = state.factories[id];
   const building =
-    { [BUILDING.FORT]: " · Fort", [BUILDING.FACTORY]: " · Factory" }[state.buildings[id]] ?? "";
+    (state.forts[id] ? " · Fort" : "") +
+    (level ? ` · <b class="gold">Factory L${level}</b> (+${level * FACTORY_OUTPUT} ⚙)` : "");
   const city = p.city ? (p.capitalOf >= 0 ? " · <b>Capital ★3</b>" : " · <b>City ★1</b>") : "";
   const supply =
     owner >= 0 && !isSupplied(map, state, id)
@@ -358,13 +362,18 @@ function orderRows(game, map, id) {
         <button data-action="recruitMax" data-id="${id}">MAX</button>
       </div>`);
   }
-  if (p.city && state.buildings[id] === BUILDING.NONE) {
+  const fortOk = canBuild(map, state, me, id, BUILDING.FORT);
+  const factoryOk = canBuild(map, state, me, id, BUILDING.FACTORY);
+  if (fortOk || factoryOk) {
     const active = (kind) => (orders.builds[id] === kind ? "on" : "");
+    const level = state.factories[id];
+    const factoryLabel = level ? `UPGRADE TO L${level + 1}` : "FACTORY";
+    const payback = `+${FACTORY_OUTPUT} ⚙/turn`;
     rows.push(`
       <div class="row">
         <span class="label">Construct</span>
-        <button class="${active(BUILDING.FORT)}" data-action="fort" data-id="${id}">FORT ⚙${buildCost(me, BUILDING.FORT)}</button>
-        <button class="${active(BUILDING.FACTORY)}" data-action="factory" data-id="${id}">FACTORY ⚙${buildCost(me, BUILDING.FACTORY)}</button>
+        ${fortOk ? `<button class="${active(BUILDING.FORT)}" data-action="fort" data-id="${id}">FORT ⚙${buildCostAt(state, me, id, BUILDING.FORT)}</button>` : ""}
+        ${factoryOk ? `<button class="${active(BUILDING.FACTORY)}" data-action="factory" data-id="${id}">${factoryLabel} ⚙${buildCostAt(state, me, id, BUILDING.FACTORY)}</button><span class="muted">${payback}</span>` : ""}
       </div>`);
   }
   return `<div class="actions">${rows.join("")}</div>`;

@@ -25,8 +25,10 @@ import {
   sweepProvince,
 } from "./render.js";
 import {
+  FACTORY_OUTPUT,
   attackStrength,
-  buildCost,
+  buildCostAt,
+  canBuild,
   createInitialState,
   defenseStrength,
   divisionCount,
@@ -145,7 +147,7 @@ export function availableFrom(id) {
 
 export function industryLeft() {
   const game = store.game;
-  return game.state.industry[game.me] - ordersCost(game.orders[game.me], game.me);
+  return game.state.industry[game.me] - ordersCost(game.orders[game.me], game.me, game.state);
 }
 
 export function ordersChanged() {
@@ -204,7 +206,8 @@ export function applyPanelAction(action, { from, to, id }) {
       const previous = orders.builds[id];
       delete orders.builds[id];
       if (previous === kind) break;
-      if (industryLeft() >= buildCost(game.me, kind)) orders.builds[id] = kind;
+      if (!canBuild(store.map, game.state, game.me, id, kind)) break;
+      if (industryLeft() >= buildCostAt(game.state, game.me, id, kind)) orders.builds[id] = kind;
       else {
         if (previous) orders.builds[id] = previous;
         toast("Not enough industry");
@@ -357,6 +360,28 @@ function reportCaptures(animation) {
   return captured;
 }
 
+function reportIndustry(animation) {
+  const { map } = store;
+  const { before, after, events } = animation;
+  for (const c of events.captures) {
+    const p = map.provinces[c.province];
+    if (p && before.factories[c.province] > 0)
+      addFloater(p.x + 26, p.y + 2, "FACTORY DAMAGED", "#ff9b7a", 0.5);
+  }
+  for (const p of map.provinces) {
+    const level = after.factories[p.id];
+    if (!level || after.owner[p.id] < 0) continue;
+    const built = level > before.factories[p.id] && before.owner[p.id] === after.owner[p.id];
+    addFloater(
+      p.x + 26,
+      p.y - 6,
+      built ? `FACTORY L${level}!` : `+${level * FACTORY_OUTPUT} ⚙`,
+      "#ffd76a",
+      built ? 0.3 : 0.9,
+    );
+  }
+}
+
 function reportAttrition(events) {
   const { map } = store;
   for (const a of events.attrition || []) {
@@ -439,6 +464,7 @@ export function applyAnimation() {
 
   const captured = reportCaptures(animation);
   reportAttrition(animation.events);
+  reportIndustry(animation);
   reportSeason(animation.before, animation.after);
   reportWorldEvent(animation.events.world);
   game.report = buildReport(animation);
