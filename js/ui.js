@@ -13,6 +13,8 @@ import {
   applyPanelAction,
   availableArmor,
   availableFrom,
+  availableGuns,
+  specialsLeft,
   canOrder,
   canPlan,
   industryLeft,
@@ -26,15 +28,22 @@ import {
 import {
   ARMOR_COST,
   ARMOR_DEFENSE,
+  GUN_ATTACK,
+  GUN_COST,
+  GUN_DEFENSE,
+  POCKET_SURRENDER,
+  canDeploy,
+  gunsOf,
+  siegeOf,
+  specialCap,
   FACTORY_OUTPUT,
   KEEP_OFFER,
   RAIL_RANGE,
   armorAttack,
-  armorCount,
   armorOf,
-  maxTanks,
   ordersCost,
   areAllied,
+  flankBonus,
   attackStrength,
   blocOf,
   blocPoints,
@@ -352,7 +361,9 @@ function overviewPanel(game, map) {
 
 function unitsText(state, id) {
   const tanks = armorOf(state)[id];
-  return `${state.troops[id]} divisions${tanks ? ` (${tanks} 🛡 tank)` : ""}`;
+  const guns = gunsOf(state)[id];
+  const kit = [tanks ? `${tanks} 🛡 tank` : "", guns ? `${guns} 💥 artillery` : ""].filter(Boolean).join(", ");
+  return `${state.troops[id]} divisions${kit ? ` (${kit})` : ""}`;
 }
 
 function provinceInfo(map, state, id) {
@@ -365,7 +376,7 @@ function provinceInfo(map, state, id) {
   const city = p.city ? (p.capitalOf >= 0 ? " · <b>Capital ★3</b>" : " · <b>City ★1</b>") : "";
   const supply =
     owner >= 0 && !isSupplied(map, state, id)
-      ? `<div class="meta bad">⚠ OUT OF SUPPLY · defense ×${SUPPLY_DEFENSE} · loses divisions every turn</div>`
+      ? `<div class="meta bad">⚠ ENCIRCLED ${siegeOf(state)[id]} turn${siegeOf(state)[id] === 1 ? "" : "s"} · defense ×${SUPPLY_DEFENSE} · losing divisions · surrenders after ${POCKET_SURRENDER} turns</div>`
       : "";
   return `
     <div class="info">
@@ -389,19 +400,42 @@ function moveVerdict(game, map, move) {
     return { text: target.neighbors.includes(move.from) ? "move" : "redeploy", winning: true };
   }
   const defense = defenseStrength(map, state, move.to);
-  const strength = attackStrength(state, me, move.count, move.armor || 0, target.terrain);
+  const together = game.orders[me].moves.filter((m) => m.to === move.to);
+  const flank = flankBonus(new Set(together.map((m) => m.from)).size);
+  const strength =
+    together.reduce(
+      (sum, m) => sum + attackStrength(state, me, m.count, m.armor || 0, target.terrain, m.guns || 0),
+      0,
+    ) *
+    (1 + flank);
   const winning = strength > defense;
-  return { text: `${round1(strength)} ${winning ? "✔ beats" : "✖ loses to"} ${round1(defense)}`, winning };
+  const flankText = flank > 0 ? ` (flank +${Math.round(flank * 100)}%)` : "";
+  return {
+    text: `${round1(strength)}${flankText} ${winning ? "✔ beats" : "✖ loses to"} ${round1(defense)}`,
+    winning,
+  };
+}
+
+function kitText(count, tanks, guns) {
+  const parts = [];
+  if (tanks) parts.push(`${tanks} 🛡`);
+  if (guns) parts.push(`${guns} 💥`);
+  return parts.length ? ` (${parts.join(" · ")})` : "";
+}
+
+function stepper(label, minus, plus, value, data) {
+  return `<span class="muted">${label}</span><button data-action="${minus}" ${data}>−</button><b>${value}</b><button data-action="${plus}" ${data}>+</button>`;
 }
 
 function moveRow(game, map, move) {
   const data = `data-from="${move.from}" data-to="${move.to}"`;
   const verdict = moveVerdict(game, map, move);
   const tanks = move.armor || 0;
+  const guns = move.guns || 0;
   const tankControls =
-    tanks || availableArmor(move.from) > 0
-      ? `<span class="muted">🛡</span><button data-action="tank-less" ${data}>−</button><b>${tanks}</b><button data-action="tank-more" ${data}>+</button>`
-      : "";
+    tanks || availableArmor(move.from) > 0 ? stepper("🛡", "tank-less", "tank-more", tanks, data) : "";
+  const gunControls =
+    guns || availableGuns(move.from) > 0 ? stepper("💥", "gun-less", "gun-more", guns, data) : "";
   return `
       <div class="row">
         <span class="label">→ ${map.provinces[move.to].name}</span>
@@ -409,7 +443,7 @@ function moveRow(game, map, move) {
         <button data-action="more" ${data}>+</button>
         <button data-action="half" ${data}>½</button>
         <button data-action="all" ${data}>ALL</button>
-        ${tankControls}
+        ${tankControls}${gunControls}
         <span class="${verdict.winning ? "good" : "bad"}">${verdict.text}</span>
         <button data-action="cancel" ${data}>✕</button>
       </div>`;
@@ -418,27 +452,30 @@ function moveRow(game, map, move) {
 function productionControls(game, map, id, compact = false) {
   const { state, me } = game;
   const orders = game.orders[me];
-  const p = map.provinces[id];
   const parts = [];
-  if (p.city) {
+  if (!canDeploy(map, state, me, id)) {
+    if (!compact) parts.push('<span class="muted">Cut off from supply: no new units can deploy here</span>');
+  } else {
+    const data = `data-id="${id}"`;
     parts.push(`
-        <span class="${compact ? "unit" : "label"}">${compact ? "INF" : "Train infantry ⚙1"}</span>
-        <button data-action="unrecruit" data-id="${id}">−</button><b>${orders.recruits[id] || 0}</b>
-        <button data-action="recruit1" data-id="${id}">+1</button>
-        <button data-action="recruit5" data-id="${id}">+5</button>
-        ${compact ? "" : `<button data-action="recruitMax" data-id="${id}">MAX</button>`}`);
-  }
-  const room = maxTanks(state, id);
-  if (p.city && room > 0) {
-    parts.push(`
-        <span class="${compact ? "unit" : "label"}">${compact ? "🛡 TANK" : `Build tanks ⚙${ARMOR_COST} (max ${room})`}</span>
-        <button data-action="untank" data-id="${id}">−</button><b>${orders.tanks[id] || 0}</b>
-        <button data-action="tank1" data-id="${id}">+1</button>
-        <button data-action="tankMax" data-id="${id}">MAX</button>`);
-  } else if (p.city) {
-    parts.push(
-      `<span class="muted">${compact ? "🛡 needs a factory" : "Tanks need a factory in this city"}</span>`,
-    );
+        <span class="${compact ? "unit" : "label"}">${compact ? "INF" : "Infantry ⚙1"}</span>
+        <button data-action="unrecruit" ${data}>−</button><b>${orders.recruits[id] || 0}</b>
+        <button data-action="recruit1" ${data}>+1</button>
+        <button data-action="recruit5" ${data}>+5</button>
+        ${compact ? "" : `<button data-action="recruitMax" ${data}>MAX</button>`}`);
+    const cap = specialCap(state, me);
+    if (cap > 0) {
+      parts.push(`
+        <span class="${compact ? "unit" : "label"}">${compact ? "🛡 TANK" : `Tanks ⚙${ARMOR_COST}`}</span>
+        <button data-action="untank" ${data}>−</button><b>${orders.tanks[id] || 0}</b>
+        <button data-action="tank1" ${data}>+1</button>
+        <span class="${compact ? "unit" : "label short"}">${compact ? "💥 ARTY" : `Artillery ⚙${GUN_COST}`}</span>
+        <button data-action="ungun" ${data}>−</button><b>${orders.artillery[id] || 0}</b>
+        <button data-action="gun1" ${data}>+1</button>
+        ${compact ? "" : `<span class="muted">${specialsLeft()} of ${cap} left this turn</span>`}`);
+    } else if (!compact) {
+      parts.push('<span class="muted">Build a factory to unlock tanks and artillery</span>');
+    }
   }
   const fortOk = canBuild(map, state, me, id, BUILDING.FORT);
   const factoryOk = canBuild(map, state, me, id, BUILDING.FACTORY);
@@ -450,7 +487,7 @@ function productionControls(game, map, id, compact = false) {
         ${compact ? "" : '<span class="label">Construct</span>'}
         ${fortOk ? `<button class="${active(BUILDING.FORT)}" data-action="fort" data-id="${id}">FORT ⚙${buildCostAt(state, me, id, BUILDING.FORT)}</button>` : ""}
         ${factoryOk ? `<button class="${active(BUILDING.FACTORY)}" data-action="factory" data-id="${id}">🏭 ${factoryLabel} ⚙${buildCostAt(state, me, id, BUILDING.FACTORY)}</button>` : ""}
-        ${compact ? "" : `<span class="muted">factories +${FACTORY_OUTPUT} ⚙/turn, unlock tanks</span>`}`);
+        ${compact ? "" : `<span class="muted">+${FACTORY_OUTPUT} ⚙/turn and +2 tanks/artillery per turn</span>`}`);
   }
   return compact ? parts.join("") : parts.map((part) => `<div class="row">${part}</div>`).join("");
 }
@@ -458,34 +495,43 @@ function productionControls(game, map, id, compact = false) {
 function orderRows(game, map, id) {
   const outgoing = game.orders[game.me].moves.filter((m) => m.from === id);
   const rows = [];
+  const hostileNeighbors = map.provinces[id].neighbors.filter(
+    (n) => canOrder(id, n) && game.state.owner[n] !== game.me,
+  );
   if (!outgoing.length) {
-    const tanks = availableArmor(id);
     rows.push(
-      `<div class="row muted">Drag or right-click a target · ${availableFrom(id)} free${tanks ? ` (${tanks} tanks)` : ""} · redeploy reaches ${RAIL_RANGE} provinces</div>`,
+      `<div class="row muted">Drag or right-click a target · ${availableFrom(id)} free${kitText(availableFrom(id), availableArmor(id), availableGuns(id))} · redeploy reaches ${RAIL_RANGE} provinces</div>`,
     );
   }
   for (const m of outgoing) rows.push(moveRow(game, map, m));
+  if (hostileNeighbors.length > 1 && game.state.troops[id] > 1) {
+    rows.push(
+      `<div class="row"><button data-action="split" data-id="${id}">⚔ ATTACK ALL ${hostileNeighbors.length} NEIGHBORS</button><span class="muted">splits this army evenly</span></div>`,
+    );
+  }
   return `<div class="actions">${rows.join("")}${productionControls(game, map, id)}</div>`;
 }
 
 function groupPanel(game, map, ids) {
-  const { state, me } = game;
+  const { me } = game;
   const orders = game.orders[me];
   const total = ids.reduce((sum, id) => sum + availableFrom(id), 0);
   const tanks = ids.reduce((sum, id) => sum + availableArmor(id), 0);
+  const guns = ids.reduce((sum, id) => sum + availableGuns(id), 0);
   const moves = orders.moves.filter((m) => ids.includes(m.from));
   return `
     <div class="info">
       <div class="info-head">${flagImage(me)}
         <div>
           <div class="info-title">${ids.length} PROVINCES</div>
-          <div class="info-sub">${total} free divisions · ${tanks} tanks</div>
+          <div class="info-sub">${total} free divisions${kitText(total, tanks, guns)}</div>
         </div>
       </div>
-      <div class="meta">Right-click or tap a target to send everyone who can reach it. Shift + right-click sends half.</div>
+      <div class="meta">Right-click or tap a target to send everyone who can reach it. <b>OFFENSIVE</b> pushes the whole front: each army joins the best attack it can win, with flanking bonuses for multi-side assaults.</div>
     </div>
-    <div class="actions">${moves.map((m) => moveRow(game, map, m)).join("") || '<div class="row muted">No orders yet</div>'}
-      <div class="row"><button data-action="undo">UNDO (Z)</button></div>
+    <div class="actions">
+      <div class="row"><button class="go" data-action="offensive">⚔ OFFENSIVE</button><button data-action="undo">UNDO (Z)</button></div>
+      ${moves.map((m) => moveRow(game, map, m)).join("") || '<div class="row muted">No orders yet</div>'}
     </div>`;
 }
 
@@ -520,19 +566,29 @@ function productionPanel(game, map) {
   const { state, me } = game;
   const orders = game.orders[me];
   const distance = frontDistance(map, state, me);
-  const cities = map.provinces
-    .filter((p) => p.land && p.city && state.owner[p.id] === me)
+  const queued = (list) => Object.keys(list ?? {}).map(Number);
+  const listed = map.provinces
+    .filter(
+      (p) =>
+        p.land &&
+        state.owner[p.id] === me &&
+        (p.city ||
+          distance[p.id] === 0 ||
+          queued(orders.recruits).includes(p.id) ||
+          queued(orders.tanks).includes(p.id) ||
+          queued(orders.artillery).includes(p.id)),
+    )
     .sort((a, b) => distance[a.id] - distance[b.id] || b.capitalOf - a.capitalOf || a.id - b.id);
   const spent = ordersCost(orders, me, state);
-  const infantry = Object.values(orders.recruits).reduce((sum, n) => sum + n, 0);
-  const tanks = Object.values(orders.tanks).reduce((sum, n) => sum + n, 0);
-  const rows = cities
+  const sum = (list) => Object.values(list ?? {}).reduce((total, n) => total + n, 0);
+  const rows = listed
     .map((p) => {
       const front = distance[p.id] === 0 ? '<span class="tag bad">FRONT</span>' : "";
       const level = state.factories[p.id] ? `<span class="tag">🏭 L${state.factories[p.id]}</span>` : "";
+      const pocket = siegeOf(state)[p.id] ? '<span class="tag bad">POCKET</span>' : "";
       return `
         <div class="prod-row">
-          <span class="prod-name" data-select="${p.id}">${p.capitalOf >= 0 ? "★ " : ""}${p.name}${level}${front}<small>${state.troops[p.id]} div${armorOf(state)[p.id] ? ` · ${armorOf(state)[p.id]} 🛡` : ""}</small></span>
+          <span class="prod-name" data-select="${p.id}">${p.capitalOf >= 0 ? "★ " : ""}${p.name}${level}${front}${pocket}<small>${state.troops[p.id]} div${kitText(state.troops[p.id], armorOf(state)[p.id], gunsOf(state)[p.id])}</small></span>
           ${productionControls(game, map, p.id, true)}
         </div>`;
     })
@@ -541,7 +597,7 @@ function productionPanel(game, map) {
     <div class="production">
       <div class="prod-head">
         <span class="info-title">PRODUCTION</span>
-        <span class="meta">⚙ <b>${industryLeft()}</b> left of ${state.industry[me]} · +${income(map, state, me)}/turn · queued ${infantry} infantry, ${tanks} tanks (⚙${spent})</span>
+        <span class="meta">⚙ <b>${industryLeft()}</b> left of ${state.industry[me]} · +${income(map, state, me)}/turn · queued ${sum(orders.recruits)} inf, ${sum(orders.tanks)} tanks, ${sum(orders.artillery)} arty (⚙${spent}) · heavy units ${specialsLeft()}/${specialCap(state, me)} left</span>
         <span class="prod-tools">
           <button class="${repeatOn() ? "on" : ""}" data-action="repeat">↻ REPEAT EACH TURN</button>
           <button data-action="auto-production">AUTO</button>
@@ -549,8 +605,8 @@ function productionPanel(game, map) {
           <button data-action="close-production">✕</button>
         </span>
       </div>
-      <div class="meta prod-note">Infantry ⚙1: cheap, defends well. Tanks ⚙${ARMOR_COST}: attack ×${armorAttack(0)} on plains, ×${armorAttack(1)} forest, ×${armorAttack(2)} mountains, defend ×${ARMOR_DEFENSE}; each factory level builds 2 per turn. Units appear in the city after combat.</div>
-      ${rows || '<div class="row muted">You hold no cities.</div>'}
+      <div class="meta prod-note">New units deploy in any supplied province you hold, front line included. Infantry ⚙1: cheap, best defenders, take casualties first. 🛡 Tanks ⚙${ARMOR_COST}: attack ×${armorAttack(0)} plains, ×${armorAttack(1)} forest, ×${armorAttack(2)} mountains, defend ×${ARMOR_DEFENSE}. 💥 Artillery ⚙${GUN_COST}: attack ×${GUN_ATTACK} anywhere, defend ×${GUN_DEFENSE}. Tanks + artillery: 2 per factory level each turn. Cities and front provinces are listed; tap any province on the map to deploy there.</div>
+      ${rows || '<div class="row muted">You hold no provinces.</div>'}
     </div>`;
 }
 
@@ -752,9 +808,11 @@ export function renderTooltip(x, y, id) {
     if (sources.length) {
       const count = sources.reduce((sum, from) => sum + availableFrom(from), 0);
       const tanks = sources.reduce((sum, from) => sum + availableArmor(from), 0);
+      const guns = sources.reduce((sum, from) => sum + availableGuns(from), 0);
       if (owner === me) lines.push(`<span class="good">Right-click: redeploy ${count}</span>`);
       else {
-        const strength = attackStrength(state, me, count, p.terrain < 2 ? tanks : 0, p.terrain);
+        const strength =
+          attackStrength(state, me, count, tanks, p.terrain, guns) * (1 + flankBonus(sources.length));
         const defense = defenseStrength(map, state, id);
         const good = strength > defense;
         lines.push(
