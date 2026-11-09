@@ -8,6 +8,7 @@ import {
   WORLD_EVENTS,
   attackStrength,
   canReach,
+  flankBonus,
   areAllied,
   attackMultiplier,
   relativeTurn,
@@ -146,7 +147,23 @@ describe("resolveTurn", () => {
     assert.equal(defenseMultiplier(map, state, front), SUPPLY_DEFENSE);
     const { state: next, events } = resolveTurn(map, state, ordersFor({}));
     assert.equal(next.troops[front], 6);
-    assert.deepEqual(events.attrition, [{ province: front, lost: 2 }]);
+    assert.deepEqual(events.attrition, [{ province: front, lost: 2, surrender: 0 }]);
+    assert.equal(next.siege[front], 1);
+  });
+
+  test("a pocket cut off for three turns surrenders", () => {
+    let state = frontline(1, 1, 3, 30);
+    state.owner[depot] = NEUTRAL;
+    const losses = [];
+    for (let turn = 0; turn < 3; turn++) {
+      const result = resolveTurn(map, state, ordersFor({}));
+      losses.push(result.events.attrition.find((a) => a.province === front));
+      state = result.state;
+    }
+    assert.ok(losses[1].lost / 30 > 0.2);
+    assert.equal(losses[2].surrender, 1);
+    assert.equal(state.troops[front], 0);
+    assert.equal(state.owner[front], 3);
   });
 
   test("mass mobilization trains a free division in every captured city", () => {
@@ -220,7 +237,7 @@ describe("alliances", () => {
     const orders = ordersFor({ 1: move(home, front, 5), 3: move(depot, front, 5) });
     const joint = resolveTurn(map, together, orders).state;
     assert.ok([1, 3].includes(joint.owner[front]));
-    assert.equal(joint.troops[front], 2);
+    assert.equal(joint.troops[front], 3);
 
     const apart = frontline(1, 5, 3, 0);
     apart.owner[front] = NEUTRAL;
@@ -513,5 +530,58 @@ describe("tanks and redeployment", () => {
       state.owner[path[1]] = 1;
       assert.ok(!canReach(map, state, 1, path[0], path[RAIL_RANGE + 1]));
     }
+  });
+});
+
+describe("artillery, flanking and deployment", () => {
+  test("attacking from two directions earns a flanking bonus", () => {
+    const state = blankState();
+    const target = provinces.find(
+      (p) => p.land && p.terrain === 0 && p.neighbors.filter((n) => provinces[n].land).length >= 2,
+    );
+    const [a, b] = target.neighbors.filter((n) => provinces[n].land);
+    Object.assign(state.owner, { [a]: 1, [b]: 1, [target.id]: 3 });
+    Object.assign(state.troops, { [a]: 5, [b]: 5, [target.id]: 10 });
+    const pincer = resolveTurn(
+      map,
+      state,
+      ordersFor({
+        1: {
+          ...emptyOrders(),
+          moves: [
+            { from: a, to: target.id, count: 5 },
+            { from: b, to: target.id, count: 5 },
+          ],
+        },
+      }),
+    ).state;
+    assert.equal(pincer.owner[target.id], 1);
+    assert.ok(flankBonus(2) > 0 && flankBonus(9) <= 0.3);
+  });
+
+  test("artillery shells defenders in any terrain", () => {
+    const state = blankState();
+    assert.equal(attackStrength(state, 1, 4, 0, 2, 4), attackStrength(state, 1, 4, 0, 0, 4));
+    assert.ok(attackStrength(state, 1, 4, 0, 2, 4) > attackStrength(state, 1, 4, 4, 2, 0));
+  });
+
+  test("new units deploy anywhere supplied, and tanks plus guns share the factory cap", () => {
+    const state = blankState();
+    Object.assign(state.owner, { [home]: 1, [front]: 1 });
+    state.factories[home] = 1;
+    state.industry[1] = 20;
+    const clean = sanitizeOrders(map, state, 1, {
+      ...emptyOrders(),
+      recruits: { [front]: 3 },
+      tanks: { [front]: 1 },
+      artillery: { [home]: 5 },
+    });
+    assert.deepEqual(clean.recruits, { [front]: 3 });
+    assert.deepEqual(clean.tanks, { [front]: 1 });
+    assert.deepEqual(clean.artillery, { [home]: 1 });
+    const { state: next } = resolveTurn(map, state, ordersFor({ 1: clean }));
+    assert.equal(next.guns[home], 1);
+    assert.equal(next.armor[front], 1);
+    assert.equal(next.troops[front], 4);
   });
 });

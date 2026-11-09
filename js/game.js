@@ -25,11 +25,15 @@ import {
   sweepProvince,
 } from "./render.js";
 import {
+  flankBonus,
   ARMOR_COST,
   FACTORY_OUTPUT,
+  GUN_COST,
   armorOf,
+  canDeploy,
   canReach,
-  maxTanks,
+  gunsOf,
+  specialCap,
   areAllied,
   attackStrength,
   buildCostAt,
@@ -186,8 +190,26 @@ export function availableArmor(id) {
   return armorOf(game.state)[id] - committed;
 }
 
+export function availableGuns(id) {
+  const game = store.game;
+  const committed = game.orders[game.me].moves
+    .filter((m) => m.from === id)
+    .reduce((sum, m) => sum + (m.guns || 0), 0);
+  return gunsOf(game.state)[id] - committed;
+}
+
 function availableInfantry(id) {
-  return availableFrom(id) - availableArmor(id);
+  return availableFrom(id) - availableArmor(id) - availableGuns(id);
+}
+
+export function specialsLeft() {
+  const game = store.game;
+  const orders = game.orders[game.me];
+  const queued = [orders.tanks, orders.artillery].reduce(
+    (sum, list) => sum + Object.values(list ?? {}).reduce((a, n) => a + n, 0),
+    0,
+  );
+  return specialCap(game.state, game.me) - queued;
 }
 
 export function selection() {
@@ -261,22 +283,128 @@ export function ordersChanged() {
   if (isGuest()) sendGuestOrders();
 }
 
+function kitFor(count, armor, guns, infantry) {
+  const total = armor + guns + infantry;
+  if (count >= total) return { count: total, armor, guns };
+  let tanks = Math.min(armor, Math.round((armor * count) / total));
+  let artillery = Math.min(guns, Math.round((guns * count) / total));
+  while (count - tanks - artillery > infantry) {
+    if (tanks < armor) tanks++;
+    else artillery++;
+  }
+  while (tanks + artillery > count) {
+    if (artillery > 0) artillery--;
+    else tanks--;
+  }
+  return { count, armor: tanks, guns: artillery };
+}
+
+function splitAcross(from, targets) {
+  const game = store.game;
+  const orders = game.orders[game.me];
+  orders.moves = orders.moves.filter((m) => m.from !== from);
+  let armor = armorOf(game.state)[from];
+  let guns = gunsOf(game.state)[from];
+  let infantry = game.state.troops[from] - armor - guns;
+  targets.forEach((to, k) => {
+    const left = armor + guns + infantry;
+    const share = Math.ceil(left / (targets.length - k));
+    const kit = kitFor(share, armor, guns, infantry);
+    if (kit.count <= 0) return;
+    orders.moves.push({ from, to, ...kit });
+    armor -= kit.armor;
+    guns -= kit.guns;
+    infantry -= kit.count - kit.armor - kit.guns;
+  });
+}
+
 function placeMove(from, to, share) {
   const game = store.game;
   const orders = game.orders[game.me];
   const free = availableFrom(from);
+  const others = orders.moves.filter((m) => m.from === from && m.to !== to).map((m) => m.to);
+  if (free <= 0 && others.length && !orders.moves.some((m) => m.from === from && m.to === to)) {
+    splitAcross(from, [...others, to]);
+    return;
+  }
   const count = share >= 1 ? free : Math.max(1, Math.floor(free * share));
-  const terrain = store.map.provinces[to].terrain;
-  const tanksFirst = terrain < 2 && game.state.owner[to] !== game.me;
-  const tanks = tanksFirst
-    ? Math.min(availableArmor(from), count)
-    : Math.max(0, count - availableInfantry(from));
+  const kit = kitFor(count, availableArmor(from), availableGuns(from), availableInfantry(from));
   const existing = orders.moves.find((m) => m.from === from && m.to === to);
   if (existing) {
-    existing.count += count;
-    existing.armor = (existing.armor || 0) + tanks;
-  } else if (count > 0) orders.moves.push({ from, to, count, armor: tanks });
+    existing.count += kit.count;
+    existing.armor = (existing.armor || 0) + kit.armor;
+    existing.guns = (existing.guns || 0) + kit.guns;
+  } else if (kit.count > 0) orders.moves.push({ from, to, ...kit });
   orders.moves = orders.moves.filter((m) => m.count > 0);
+}
+
+export function launchOffensive(ids) {
+  const { game, map } = store;
+  if (!canPlan()) return 0;
+  const { state, me } = game;
+  const hostile = (n) =>
+    map.provinces[n].land && state.owner[n] !== me && !areAllied(state, me, state.owner[n]);
+  const targets = new Map();
+  for (const id of ids) {
+    if (availableFrom(id) <= 0) continue;
+    for (const n of map.provinces[id].neighbors) {
+      if (!hostile(n)) continue;
+      const entry = targets.get(n) ?? { id: n, sources: [], power: 0 };
+      entry.sources.push(id);
+      entry.power += attackStrength(
+        state,
+        me,
+        availableFrom(id),
+        availableArmor(id),
+        map.provinces[n].terrain,
+        availableGuns(id),
+      );
+      targets.set(n, entry);
+    }
+  }
+  const ranked = [...targets.values()]
+    .map((t) => {
+      const p = map.provinces[t.id];
+      const defense = defenseStrength(map, state, t.id);
+      const value = (p.city ? 3 : 1) + (p.capitalOf >= 0 ? 4 : 0);
+      return { ...t, defense, score: (t.power / Math.max(0.5, defense)) * value };
+    })
+    .filter((t) => t.power * 1.2 > t.defense)
+    .sort((a, b) => b.score - a.score || a.id - b.id);
+  remember();
+  const used = new Set();
+  let launched = 0;
+  for (const target of ranked) {
+    const sources = target.sources.filter((id) => !used.has(id));
+    if (!sources.length) continue;
+    const power = sources.reduce(
+      (sum, id) =>
+        sum +
+        attackStrength(
+          state,
+          me,
+          availableFrom(id),
+          availableArmor(id),
+          map.provinces[target.id].terrain,
+          availableGuns(id),
+        ),
+      0,
+    );
+    if (power * (1 + flankBonus(sources.length)) <= target.defense) continue;
+    for (const id of sources) {
+      placeMove(id, target.id, 1);
+      used.add(id);
+    }
+    launched++;
+  }
+  if (!launched) {
+    game.history.pop();
+    toast("No target here can be beaten. Mass more divisions first.");
+    return 0;
+  }
+  playSound("order");
+  ordersChanged();
+  return launched;
 }
 
 export function addMove(from, to, share = 1) {
@@ -311,14 +439,20 @@ export function applyPanelAction(action, { from, to, id }) {
   switch (action) {
     case "more":
       if (move && availableInfantry(from) > 0) move.count++;
-      else if (move && availableArmor(from) > 0) {
+      else if (move && availableGuns(from) > 0) {
+        move.count++;
+        move.guns = (move.guns || 0) + 1;
+      } else if (move && availableArmor(from) > 0) {
         move.count++;
         move.armor = (move.armor || 0) + 1;
       }
       break;
     case "less":
-      if (move && move.count - (move.armor || 0) > 0) move.count--;
-      else if (move && move.armor > 0) {
+      if (move && move.count - (move.armor || 0) - (move.guns || 0) > 0) move.count--;
+      else if (move && move.guns > 0) {
+        move.count--;
+        move.guns--;
+      } else if (move && move.armor > 0) {
         move.count--;
         move.armor--;
       }
@@ -326,21 +460,49 @@ export function applyPanelAction(action, { from, to, id }) {
       break;
     case "half":
       if (move) {
-        const total = move.count + availableFrom(from);
-        const tanks = (move.armor || 0) + availableArmor(from);
-        move.count = Math.max(1, Math.floor(total / 2));
-        move.armor = Math.min(tanks, move.count, Math.ceil(tanks / 2));
+        const armor = (move.armor || 0) + availableArmor(from);
+        const guns = (move.guns || 0) + availableGuns(from);
+        const infantry = move.count - (move.armor || 0) - (move.guns || 0) + availableInfantry(from);
+        Object.assign(
+          move,
+          kitFor(Math.max(1, Math.floor((armor + guns + infantry) / 2)), armor, guns, infantry),
+        );
       }
       break;
     case "all":
       if (move) {
         move.armor = (move.armor || 0) + availableArmor(from);
+        move.guns = (move.guns || 0) + availableGuns(from);
         move.count += availableFrom(from);
       }
       break;
+    case "gun-more":
+      if (move && availableGuns(from) > 0) {
+        if (move.count - (move.armor || 0) - (move.guns || 0) <= 0) move.count++;
+        move.guns = (move.guns || 0) + 1;
+      }
+      break;
+    case "gun-less":
+      if (move && move.guns > 0) {
+        if (availableInfantry(from) <= 0) move.count--;
+        move.guns--;
+        if (move.count <= 0) removeMove();
+      }
+      break;
+    case "offensive":
+      launchOffensive(selection());
+      return;
+    case "split": {
+      const targets = store.map.provinces[id].neighbors.filter(
+        (n) => store.map.provinces[n].land && canOrder(id, n) && game.state.owner[n] !== game.me,
+      );
+      if (targets.length) splitAcross(id, targets);
+      else toast("No enemy next to this province");
+      break;
+    }
     case "tank-more":
       if (move && availableArmor(from) > 0) {
-        if (move.count - (move.armor || 0) <= 0) move.count++;
+        if (move.count - (move.armor || 0) - (move.guns || 0) <= 0) move.count++;
         move.armor = (move.armor || 0) + 1;
       }
       break;
@@ -358,20 +520,24 @@ export function applyPanelAction(action, { from, to, id }) {
       orders.moves = [];
       orders.recruits = {};
       orders.tanks = {};
+      orders.artillery = {};
       orders.builds = {};
       break;
     case "clear-production":
       orders.recruits = {};
       orders.tanks = {};
+      orders.artillery = {};
       orders.builds = {};
       break;
     case "auto-production": {
       orders.recruits = {};
       orders.tanks = {};
+      orders.artillery = {};
       orders.builds = {};
       const plan = planProduction(store.map, game.state, game.me, industryLeft());
       Object.assign(orders.recruits, plan.recruits);
       Object.assign(orders.tanks, plan.tanks);
+      Object.assign(orders.artillery, plan.artillery);
       Object.assign(orders.builds, plan.builds);
       break;
     }
@@ -380,24 +546,37 @@ export function applyPanelAction(action, { from, to, id }) {
       saveRepeat(game.repeat);
       break;
     case "tank1":
-    case "tankMax": {
-      const room = maxTanks(game.state, id) - (orders.tanks[id] || 0);
-      const wanted = action === "tank1" ? 1 : room;
-      const count = Math.min(wanted, room, Math.floor(industryLeft() / ARMOR_COST));
-      if (room <= 0) toast("Tank output is limited by this city's factory level (2 per level)");
-      else if (count > 0) orders.tanks[id] = (orders.tanks[id] || 0) + count;
+    case "tankMax":
+    case "gun1":
+    case "gunMax": {
+      const tank = action.startsWith("tank");
+      const list = tank ? orders.tanks : orders.artillery;
+      const room = specialsLeft();
+      const cost = tank ? ARMOR_COST : GUN_COST;
+      const wanted = action.endsWith("1") ? 1 : room;
+      const count = Math.min(wanted, room, Math.floor(industryLeft() / cost));
+      if (!canDeploy(store.map, game.state, game.me, id))
+        toast("Units can only deploy in supplied provinces");
+      else if (room <= 0)
+        toast("Tanks and artillery are limited to 2 per factory level each turn. Build factories!");
+      else if (count > 0) list[id] = (list[id] || 0) + count;
       else toast("Not enough industry");
       break;
     }
     case "untank":
       if (orders.tanks[id] && --orders.tanks[id] <= 0) delete orders.tanks[id];
       break;
+    case "ungun":
+      if (orders.artillery[id] && --orders.artillery[id] <= 0) delete orders.artillery[id];
+      break;
     case "recruit1":
     case "recruit5":
     case "recruitMax": {
       const wanted = { recruit1: 1, recruit5: 5, recruitMax: Infinity }[action];
       const count = Math.min(wanted, industryLeft());
-      if (count > 0) orders.recruits[id] = (orders.recruits[id] || 0) + count;
+      if (!canDeploy(store.map, game.state, game.me, id))
+        toast("Units can only deploy in supplied provinces");
+      else if (count > 0) orders.recruits[id] = (orders.recruits[id] || 0) + count;
       else toast("Not enough industry");
       break;
     }
@@ -501,7 +680,11 @@ export function repeatOn() {
 function rememberProduction(nation) {
   const game = store.game;
   const orders = game.orders[nation];
-  game.production[nation] = { recruits: { ...orders.recruits }, tanks: { ...orders.tanks } };
+  game.production[nation] = {
+    recruits: { ...orders.recruits },
+    tanks: { ...orders.tanks },
+    artillery: { ...orders.artillery },
+  };
 }
 
 function repeatProduction(nation) {
@@ -510,17 +693,24 @@ function repeatProduction(nation) {
   if (!last || !repeatOn()) return;
   const orders = game.orders[nation];
   let budget = game.state.industry[nation];
-  for (const key in last.tanks) {
-    const id = Number(key);
-    if (game.state.owner[id] !== nation) continue;
-    const count = Math.min(last.tanks[key], maxTanks(game.state, id), Math.floor(budget / ARMOR_COST));
-    if (count <= 0) continue;
-    orders.tanks[id] = count;
-    budget -= count * ARMOR_COST;
+  let cap = specialCap(game.state, nation);
+  for (const [kind, cost] of [
+    ["tanks", ARMOR_COST],
+    ["artillery", GUN_COST],
+  ]) {
+    for (const key in last[kind] ?? {}) {
+      const id = Number(key);
+      if (!canDeploy(map, game.state, nation, id)) continue;
+      const count = Math.min(last[kind][key], cap, Math.floor(budget / cost));
+      if (count <= 0) continue;
+      orders[kind][id] = count;
+      budget -= count * cost;
+      cap -= count;
+    }
   }
   for (const key in last.recruits) {
     const id = Number(key);
-    if (game.state.owner[id] !== nation || !map.provinces[id].city) continue;
+    if (!canDeploy(map, game.state, nation, id)) continue;
     const count = Math.min(last.recruits[key], budget);
     if (count <= 0) continue;
     orders.recruits[id] = count;
@@ -695,12 +885,46 @@ function reportIndustry(animation) {
   }
 }
 
-function reportAttrition(events) {
+function reportAttrition(animation) {
   const { map } = store;
+  const { events, before, after } = animation;
   for (const a of events.attrition || []) {
     const p = map.provinces[a.province];
     if (!p) continue;
-    addFloater(p.x, p.y + 4, `−${a.lost} SUPPLY`, "#ff9b7a", 0.6);
+    addFloater(p.x, p.y + 4, a.surrender ? `${a.lost} SURRENDER` : `−${a.lost} SUPPLY`, "#ff9b7a", 0.6);
+  }
+  const surrendered = new Map();
+  for (const a of events.attrition || []) {
+    if (!a.surrender) continue;
+    const owner = after.owner[a.province];
+    const entry = surrendered.get(owner) ?? { lost: 0, place: map.provinces[a.province]?.name ?? "" };
+    entry.lost += a.lost;
+    surrendered.set(owner, entry);
+  }
+  for (const [owner, entry] of surrendered) {
+    postNews(
+      `THE ${entry.place.toUpperCase()} POCKET SURRENDERS`,
+      `${entry.lost} ${NATION_NAMES[owner] ?? ""} divisions lay down their arms after weeks without supplies.`,
+      owner,
+    );
+    addShake(6);
+  }
+  const trapped = new Map();
+  const beforeSiege = before.siege ?? [];
+  for (const p of map.provinces) {
+    const owner = after.owner[p.id];
+    if (!p.land || owner < 0 || (after.siege?.[p.id] ?? 0) !== 1 || (beforeSiege[p.id] ?? 0) > 0) continue;
+    const entry = trapped.get(owner) ?? { divisions: 0, place: p.name };
+    entry.divisions += after.troops[p.id];
+    trapped.set(owner, entry);
+  }
+  for (const [owner, entry] of trapped) {
+    if (entry.divisions <= 0) continue;
+    postNews(
+      `ENCIRCLED NEAR ${entry.place.toUpperCase()}`,
+      `${entry.divisions} ${NATION_NAMES[owner]} divisions are cut off. Break the ring within 3 turns or they surrender.`,
+      owner,
+    );
   }
 }
 
@@ -821,7 +1045,7 @@ export function applyAnimation() {
   if (fighting) addShake(Math.min(9, 2.5 + fighting * 0.8));
 
   const captured = reportCaptures(animation);
-  reportAttrition(animation.events);
+  reportAttrition(animation);
   reportIndustry(animation);
   reportSeason(animation.before, animation.after);
   reportWorldEvent(animation.events.world);
