@@ -24,7 +24,8 @@
         <p class="kicker">1936 · FOUR NATIONS · ONE CONTINENT</p>
         <button class="btn go" id="play-online">PLAY ONLINE</button>
         <button class="btn" id="resume-game" hidden>RESUME</button>
-        <button class="btn" id="practice">PRACTICE VS AI</button>
+        <button class="btn" id="practice">PLAY ON THIS DEVICE</button>
+        <p class="note">vs AI or pass-and-play with friends</p>
         <button class="btn small" id="how-to-play">HOW TO PLAY</button>
       </div>
     </section>
@@ -55,12 +56,105 @@
       </div>
     </section>
 
+    <section id="setup" class="screen">
+      <div class="card scroll">
+        <h2>NEW WAR</h2>
+        <div class="option-row" id="setup-scenario">
+          <span class="option-label">MAP</span>
+          <button data-value="random">RANDOM CONTINENT</button>
+          <button data-value="europe">EUROPE 1939</button>
+        </div>
+        <div class="option-row" id="setup-nations">
+          <span class="option-label">NATIONS</span>
+          <button data-value="2">2</button>
+          <button data-value="3">3</button>
+          <button data-value="4">4</button>
+          <button data-value="5">5</button>
+          <button data-value="6">6</button>
+          <button data-value="8">8</button>
+        </div>
+        <div class="option-row" id="setup-size">
+          <span class="option-label">SIZE</span>
+          <button data-value="small">SMALL</button>
+          <button data-value="medium">MEDIUM</button>
+          <button data-value="large">LARGE</button>
+        </div>
+        <div class="section-title">WHO PLAYS? TAP A NATION TO SWITCH PLAYER / AI</div>
+        <div class="seats pick" id="setup-seats"></div>
+        <div class="option-row" id="setup-difficulty">
+          <span class="option-label">AI</span>
+          <button data-value="easy">EASY</button>
+          <button data-value="normal">NORMAL</button>
+          <button data-value="hard">HARD</button>
+        </div>
+        <div class="option-row" id="setup-length">
+          <span class="option-label">LENGTH</span>
+          <button data-value="12">QUICK · 12</button>
+          <button data-value="18">NORMAL · 18</button>
+          <button data-value="30">LONG · 30</button>
+        </div>
+        <div class="option-row" id="setup-winter">
+          <span class="option-label">WINTER</span>
+          <button data-value="1">ON</button>
+          <button data-value="0">OFF</button>
+        </div>
+        <div class="option-row" id="setup-events">
+          <span class="option-label">EVENTS</span>
+          <button data-value="1">ON</button>
+          <button data-value="0">OFF</button>
+        </div>
+        <div class="option-row" id="setup-factions">
+          <span class="option-label">FACTIONS</span>
+          <button data-value="1">HISTORICAL</button>
+          <button data-value="0">NONE</button>
+        </div>
+        <p class="note" id="setup-note"></p>
+        <button class="btn go" id="setup-start">DECLARE WAR</button>
+        <button class="btn small" id="setup-back">BACK</button>
+      </div>
+    </section>
+
+    <section id="handoff" class="screen">
+      <div class="card">
+        <p class="kicker" id="handoff-kicker"></p>
+        <img id="handoff-flag" class="big-flag" alt="" />
+        <h2 id="handoff-name"></h2>
+        <p class="note" id="handoff-note"></p>
+        <button class="btn go" id="handoff-go">I'M READY</button>
+      </div>
+    </section>
+
     <section id="lobby" class="screen">
       <div class="card">
         <p class="kicker">GAME CODE</p>
         <div class="code" id="lobby-code">----</div>
         <p class="note" id="lobby-link"></p>
         <div class="seats" id="lobby-seats"></div>
+        <div class="option-row" id="option-scenario">
+          <span class="option-label">MAP</span>
+          <button data-value="random">RANDOM</button>
+          <button data-value="europe">EUROPE 1939</button>
+        </div>
+        <div class="option-row" id="option-nations">
+          <span class="option-label">NATIONS</span>
+          <button data-value="2">2</button>
+          <button data-value="3">3</button>
+          <button data-value="4">4</button>
+          <button data-value="6">6</button>
+          <button data-value="8">8</button>
+        </div>
+        <div class="option-row" id="option-size">
+          <span class="option-label">SIZE</span>
+          <button data-value="small">SMALL</button>
+          <button data-value="medium">MEDIUM</button>
+          <button data-value="large">LARGE</button>
+        </div>
+        <div class="option-row" id="option-difficulty">
+          <span class="option-label">AI</span>
+          <button data-value="easy">EASY</button>
+          <button data-value="normal">NORMAL</button>
+          <button data-value="hard">HARD</button>
+        </div>
         <div class="option-row" id="option-visibility">
           <span class="option-label">LOBBY</span>
           <button data-value="private">PRIVATE</button>
@@ -105,14 +199,24 @@
           </p>
           <p>• <b>Winter</b> (Dec–Feb) freezes the front: every attack is <b>20% weaker</b>.</p>
           <p>
-            • Each nation has a trait: <b>Karnia</b> blitzkrieg (+10% attack), <b>Vestmark</b> cheap
-            factories, <b>Ostravia</b> free divisions in captured cities, <b>Aurelia</b> fortified cities.
+            • Each nation has a trait: blitzkrieg (+10% attack), cheaper factories, free divisions in captured
+            cities, fortified cities, immunity to winter, or tougher defense in forests and mountains. Tap a
+            flag to see it.
           </p>
           <p>
-            • <b>Alliances:</b> tap a flag in the top bar to offer one. It forms once both nations have
-            offered. Allies can't attack each other, share supply lines, fight together and
-            <b>win together</b>, but an alliance needs <b>75%</b> of the victory points instead of 60%. Either
-            side can break the pact.
+            • <b>Diplomacy:</b> tap a flag in the top bar. Offer a pact, invite nations into your faction or
+            ask to join theirs. A pact forms once both sides have offered. Faction members can't attack each
+            other, share supply lines, fight as one army and <b>win together</b>, but need more victory
+            points: 75% for two, 85% for three. You can also <b>send aid</b> (industry) to anyone, or leave
+            your faction.
+          </p>
+          <p>
+            • <b>Play on this device</b> lets you pick the map, 2 to 8 nations, map size, AI difficulty,
+            winter and events. Tap several nations to make them players for <b>pass-and-play</b>.
+          </p>
+          <p>
+            • <b>Europe 1939</b> drops you into September 1939 with the real powers. Dashed lines are sea
+            crossings you can attack across.
           </p>
           <p>• World events like strikes, booms and partisan uprisings can shake up the war.</p>
           <p>

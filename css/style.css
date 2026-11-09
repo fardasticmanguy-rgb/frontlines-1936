@@ -1038,3 +1038,69 @@ input {
   background: #86372c;
   color: #fff;
 }
+
+.card.scroll {
+  max-height: 94vh;
+  overflow-y: auto;
+  gap: 10px;
+}
+.seats.pick .seat {
+  cursor: pointer;
+  min-width: 280px;
+  padding: 6px 12px;
+  font-size: 16px;
+}
+.seats.pick .seat.local {
+  border-color: var(--accent);
+  background: rgba(241, 207, 107, 0.1);
+}
+.seats.pick .seat .role {
+  margin-left: auto;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+.seats.pick .seat.local .role {
+  color: var(--accent);
+}
+.seat .trait-tag {
+  display: block;
+  font-family: var(--body);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #8f8b73;
+}
+#nations.crowded {
+  gap: 3px;
+}
+#nations.crowded .nation img {
+  width: 24px;
+  height: 16px;
+}
+#nations.crowded .nation {
+  font-size: 10px;
+}
+#nations {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 6px 2px 2px;
+  scrollbar-width: none;
+}
+#nations::-webkit-scrollbar {
+  display: none;
+}
+#end-turn,
+#menu-button {
+  flex-shrink: 0;
+}
+@media (max-width: 520px) {
+  #nations.crowded .nation img {
+    width: 20px;
+    height: 13px;
+  }
+  #nations.crowded {
+    gap: 2px;
+  }
+}
