@@ -7,11 +7,12 @@ import {
   clearMovesFrom,
   endTurn,
   orderFromSelection,
+  peaceMessage,
   selection,
   undoOrders,
 } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
-import { areAllied } from "./rules.js";
+import { canEnter } from "./rules.js";
 import { canvas } from "./render.js";
 import { store } from "./store.js";
 import { currentScreen, hideTooltip, keepAwake, renderPanel, renderTooltip, toast } from "./ui.js";
@@ -190,8 +191,8 @@ function finishDrag(game, drag, target) {
     game.selected = drag.from;
     game.group = [];
     renderPanel();
-  } else if (areAllied(game.state, game.me, game.state.owner[target])) {
-    toast("You can't attack your ally");
+  } else if (!canEnter(game.state, game.me, game.state.owner[target])) {
+    toast(peaceMessage(game.state.owner[target]));
   } else {
     toast("Too far: attack a neighbor, or redeploy up to 4 provinces through your own land");
   }
@@ -220,7 +221,7 @@ function handleTap(game, target, pointer) {
     toggleInGroup(game, target);
     return;
   }
-  const hostile = !ownsProvince(game, target) && !areAllied(game.state, game.me, game.state.owner[target]);
+  const hostile = !ownsProvince(game, target) && canEnter(game.state, game.me, game.state.owner[target]);
   if (hostile && selection().some((id) => canOrder(id, target) && availableFrom(id) > 0)) {
     orderFromSelection(target);
     return;
@@ -254,8 +255,8 @@ function handleRightClick(game, target, pointer) {
   }
   if (!orderFromSelection(target, pointer.shift ? 0.5 : 1)) {
     toast(
-      areAllied(game.state, game.me, game.state.owner[target])
-        ? "You can't attack your ally"
+      !canEnter(game.state, game.me, game.state.owner[target])
+        ? peaceMessage(game.state.owner[target])
         : "Out of reach: attack a neighbor, or redeploy up to 4 provinces through your own land",
     );
   }

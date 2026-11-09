@@ -15,6 +15,7 @@ import { createRng } from "./random.js";
 import {
   areAllied,
   armorOf,
+  atWar,
   attackStrength,
   defenseStrength,
   flankBonus,
@@ -302,7 +303,7 @@ function buildLayers() {
   r.strokeStyle = "rgba(55, 45, 28, 0.42)";
   r.lineWidth = 0.9;
   strokeEdges(r, map, (e) => provinces[e.a].land && provinces[e.b].land);
-  if (map.scenario === "europe") {
+  if (map.scenario !== "random" && map.decor) {
     r.strokeStyle = "rgba(28, 24, 16, 0.8)";
     r.lineWidth = 1.7;
     strokeEdges(
@@ -919,7 +920,7 @@ function drawBorders(map, state, me) {
   strokeEdges(ctx, map, (e) => {
     const a = state.owner[e.a];
     const b = state.owner[e.b];
-    return bothLand(e) && a >= 0 && b >= 0 && a !== b && (a === me || b === me) && !areAllied(state, a, b);
+    return bothLand(e) && a >= 0 && b >= 0 && (a === me || b === me) && atWar(state, a, b);
   });
   ctx.setLineDash([]);
 }

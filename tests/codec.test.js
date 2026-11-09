@@ -11,6 +11,8 @@ test("state survives an encode/decode round trip", () => {
   state.faction = [0, -1, -1, 0, -1, -1, -1, -1];
   state.offers = [-1, 2, -1, -1, -1, -1, -1, -1];
   state.rules = { winter: 0, events: 1 };
+  state.war = [6, 1, 1, 0, 0, 0, 0, 0];
+  state.pending = [0, 0, 0, 16, 8, 0, 0, 0];
   state.troops[3] = 6;
   state.armor[3] = 2;
   state.guns[3] = 1;
@@ -61,6 +63,7 @@ test("orders survive an encode/decode round trip", () => {
     breakAlliance: 1,
     aidTo: 3,
     aidAmount: 4,
+    declare: 5,
   };
   assert.deepEqual(decodeOrders(encodeOrders(orders)), orders);
 });

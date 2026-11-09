@@ -1,6 +1,6 @@
 import { MAP_HEIGHT, MAP_WIDTH, MAX_NATIONS, applyRoster, clamp } from "./config.js";
 import { MAP_SIZES, RANDOM_ROSTER } from "./nations.js";
-import { generateEurope } from "./scenarios/europe.js";
+import { generateEurope, isEuropean } from "./scenarios/europe.js";
 import { centroid, distanceSquared, voronoiCell } from "./geometry.js";
 import { createRng, createValueNoise } from "./random.js";
 
@@ -30,7 +30,7 @@ function capitalAnchors(count) {
 
 export function normalizeMapOptions(options = {}) {
   return {
-    scenario: options.scenario === "europe" ? "europe" : "random",
+    scenario: isEuropean(options.scenario) ? options.scenario : "random",
     nations: clamp(Math.floor(Number(options.nations) || 4), 2, MAX_NATIONS),
     size: MAP_SIZES[options.size] ? options.size : "medium",
   };
@@ -331,7 +331,7 @@ function fingerprint(provinces) {
 
 export function generateMap(seed, rawOptions) {
   const options = normalizeMapOptions(rawOptions);
-  if (options.scenario === "europe") return generateEurope(seed);
+  if (isEuropean(options.scenario)) return generateEurope(seed, options.scenario);
   applyRoster(RANDOM_ROSTER);
   const rng = createRng(seed);
   const siteCount = MAP_SIZES[options.size].sites;
