@@ -15,7 +15,9 @@ let pinch = null;
 
 function provinceAt(x, y) {
   const { provinces } = store.map;
-  for (const p of provinces) if (p.land && pointInPolygon(p.polygon, x, y)) return p.id;
+  for (const p of provinces) {
+    if (p.land && (p.rings ?? [p.polygon]).some((ring) => pointInPolygon(ring, x, y))) return p.id;
+  }
 
   let nearest = -1;
   let best = PICK_RADIUS * PICK_RADIUS;

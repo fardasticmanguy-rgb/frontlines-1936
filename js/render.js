@@ -89,14 +89,19 @@ function pathsFor(map) {
   let paths = pathCache.get(map);
   if (paths) return paths;
   const land = new Path2D();
+  const trace = (path, ring) => {
+    ring.forEach(([x, y], k) => (k ? path.lineTo(x, y) : path.moveTo(x, y)));
+    path.closePath();
+  };
   const provinces = map.provinces.map((p) => {
     const path = new Path2D();
-    p.polygon.forEach(([x, y], k) => (k ? path.lineTo(x, y) : path.moveTo(x, y)));
-    path.closePath();
+    for (const ring of [...(p.rings ?? [p.polygon]), ...(p.holes ?? [])]) trace(path, ring);
     if (p.land) land.addPath(path);
     return path;
   });
-  paths = { land, provinces, areas: map.provinces.map((p) => polygonArea(p.polygon)) };
+  const decor = new Path2D();
+  for (const ring of map.decor ?? []) trace(decor, ring);
+  paths = { land, decor, provinces, areas: map.provinces.map((p) => polygonArea(p.polygon)) };
   pathCache.set(map, paths);
   return paths;
 }
@@ -230,13 +235,15 @@ function buildLayers() {
   g.strokeStyle = "rgba(190, 220, 225, 0.07)";
   g.lineWidth = 1;
   g.beginPath();
-  for (let x = 100; x < MAP_WIDTH; x += 100) {
+  const gridWidth = map.width ?? MAP_WIDTH;
+  const gridHeight = map.height ?? MAP_HEIGHT;
+  for (let x = 100; x < gridWidth; x += 100) {
     g.moveTo(x, 0);
-    g.lineTo(x, MAP_HEIGHT);
+    g.lineTo(x, gridHeight);
   }
-  for (let y = 100; y < MAP_HEIGHT; y += 100) {
+  for (let y = 100; y < gridHeight; y += 100) {
     g.moveTo(0, y);
-    g.lineTo(MAP_WIDTH, y);
+    g.lineTo(gridWidth, y);
   }
   g.stroke();
 
@@ -249,6 +256,11 @@ function buildLayers() {
     g.strokeStyle = color;
     g.lineWidth = width;
     g.stroke(paths.land);
+    if (map.decor) g.stroke(paths.decor);
+  }
+  if (map.decor) {
+    g.fillStyle = "#8f8a74";
+    g.fill(paths.decor);
   }
   for (const p of provinces) {
     if (!p.land) continue;
@@ -280,6 +292,15 @@ function buildLayers() {
   r.strokeStyle = "rgba(55, 45, 28, 0.42)";
   r.lineWidth = 0.9;
   strokeEdges(r, map, (e) => provinces[e.a].land && provinces[e.b].land);
+  if (map.scenario === "europe") {
+    r.strokeStyle = "rgba(28, 24, 16, 0.8)";
+    r.lineWidth = 1.7;
+    strokeEdges(
+      r,
+      map,
+      (e) => provinces[e.a].land && provinces[e.b].land && provinces[e.a].owner !== provinces[e.b].owner,
+    );
+  }
   r.strokeStyle = "rgba(30, 32, 26, 0.9)";
   r.lineWidth = 1.6;
   strokeEdges(r, map, (e) => provinces[e.a].land !== provinces[e.b].land);
