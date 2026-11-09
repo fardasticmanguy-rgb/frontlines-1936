@@ -2,11 +2,11 @@ import { MAP_HEIGHT, MAP_WIDTH } from "./config.js";
 import { centroid, distanceSquared, voronoiCell } from "./geometry.js";
 import { createRng, createValueNoise } from "./random.js";
 
-const SITE_COUNT = 88;
+const SITE_COUNT = 150;
 const SITE_CANDIDATES = 14;
 const RELAX_PASSES = 2;
-const LAND_SHARE = 0.84;
-const EXTRA_CITIES = 11;
+const LAND_SHARE = 0.86;
+const EXTRA_CITIES = 18;
 const BOUNDS_PADDING = 26;
 
 const CAPITAL_ANCHORS = [
@@ -149,10 +149,11 @@ function linkNeighbors(provinces) {
 }
 
 function raiseLand(provinces, rng) {
-  const blobs = CAPITAL_ANCHORS.map(([x, y]) => [x, y, 250 + rng() * 60]);
-  blobs.push([MAP_WIDTH / 2, MAP_HEIGHT / 2, 320 + rng() * 60]);
-  for (let i = 0; i < 2; i++) {
-    blobs.push([MAP_WIDTH * (0.3 + rng() * 0.4), MAP_HEIGHT * (0.2 + rng() * 0.6), 180 + rng() * 90]);
+  const k = MAP_WIDTH / 1000;
+  const blobs = CAPITAL_ANCHORS.map(([x, y]) => [x, y, (250 + rng() * 60) * k]);
+  blobs.push([MAP_WIDTH / 2, MAP_HEIGHT / 2, (320 + rng() * 60) * k]);
+  for (let i = 0; i < 4; i++) {
+    blobs.push([MAP_WIDTH * (0.2 + rng() * 0.6), MAP_HEIGHT * (0.15 + rng() * 0.7), (170 + rng() * 90) * k]);
   }
   const noise = createValueNoise(rng, 7, 5, MAP_WIDTH, MAP_HEIGHT);
 

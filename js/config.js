@@ -1,5 +1,5 @@
-export const MAP_WIDTH = 1000;
-export const MAP_HEIGHT = 700;
+export const MAP_WIDTH = 1300;
+export const MAP_HEIGHT = 900;
 export const TAU = Math.PI * 2;
 
 export const NATION_NAMES = ["KARNIA", "VESTMARK", "OSTRAVIA", "AURELIA"];
@@ -16,7 +16,7 @@ export const BUILDING = { NONE: 0, FORT: 1, FACTORY: 2 };
 export const BUILD_COST = { [BUILDING.FORT]: 6, [BUILDING.FACTORY]: 10 };
 
 export const STARTING_INDUSTRY = 6;
-export const DEFAULT_TURNS = 15;
+export const DEFAULT_TURNS = 18;
 
 export const WINTER_ATTACK = 0.8;
 export const SUPPLY_DEFENSE = 0.75;
