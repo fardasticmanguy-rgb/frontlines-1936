@@ -129,12 +129,36 @@ function planDiplomacy(map, state, nation) {
   return { ...plan, offer: partner ?? NEUTRAL };
 }
 
+function nationSupply(map, owner, faction, nation) {
+  const { provinces } = map;
+  const side = faction[nation];
+  const passable = (id) =>
+    owner[id] === nation || (side >= 0 && owner[id] >= 0 && faction[owner[id]] === side);
+  const reached = new Uint8Array(provinces.length);
+  const queue = [];
+  for (const p of provinces) {
+    if (p.land && p.city && owner[p.id] === nation) {
+      reached[p.id] = 1;
+      queue.push(p.id);
+    }
+  }
+  for (let head = 0; head < queue.length; head++) {
+    for (const n of provinces[queue[head]].neighbors) {
+      if (!reached[n] && passable(n)) {
+        reached[n] = 1;
+        queue.push(n);
+      }
+    }
+  }
+  return reached;
+}
+
 function encirclementGain(map, state, nation, target, before) {
   const enemy = state.owner[target];
   if (enemy === NEUTRAL) return 0;
   const owner = state.owner.slice();
   owner[target] = nation;
-  const after = supplyNetwork(map, { owner, faction: state.faction });
+  const after = nationSupply(map, owner, state.faction, enemy);
   let cut = 0;
   for (const p of map.provinces) {
     if (owner[p.id] === enemy && before[p.id] && !after[p.id]) cut += 1 + state.troops[p.id] * 0.2;

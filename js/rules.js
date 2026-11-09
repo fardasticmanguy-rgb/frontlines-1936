@@ -286,7 +286,9 @@ export function canReach(map, state, nation, from, to) {
 export function supplyNetwork(map, state) {
   const owner = state.owner;
   const faction = state.faction ?? NATIONS.map(() => NEUTRAL);
-  const key = `${owner.join(",")}|${faction.join(",")}`;
+  let key = owner.length;
+  for (let i = 0; i < owner.length; i++) key = (Math.imul(key, 31) + owner[i] + 2) | 0;
+  for (let i = 0; i < faction.length; i++) key = (Math.imul(key, 37) + faction[i] + 2) | 0;
   const cached = supplyCache.get(owner);
   if (cached && cached.key === key) return cached.supplied;
 

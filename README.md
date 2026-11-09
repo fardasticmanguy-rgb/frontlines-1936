@@ -8,7 +8,7 @@ A four-player grand strategy game for tablets, inspired by Hearts of Iron. Every
 
 - **Play on this device**: pick the map, 2 to 8 nations, map size, AI difficulty, war length, winter and world events
 - **Pass-and-play**: mark several nations as players and hand the device around; plans stay secret behind a handoff screen
-- **Europe 1939**: real cities and coastlines, sea crossings, Germany, Britain, France, USSR, Italy, Poland, Spain and Turkey, neutral minors, and the Axis and Allies already formed
+- **Europe 1939**: 313 states built from real regional borders (Natural Earth, public domain), September 1939 frontiers, real coastlines from Narvik to Cairo and Baku, sea crossings, Germany, Britain, France, USSR, Italy, Poland, Spain and Turkey, neutral minors, and the Axis and Allies already formed
 - **Random continents**: procedurally generated Voronoi maps from a shared seed, small to large
 - Simultaneous turns with deterministic combat: no dice, terrain and forts multiply defense
 - Supply lines: provinces cut off from your cities are weakened and lose divisions every turn
@@ -20,7 +20,11 @@ A four-player grand strategy game for tablets, inspired by Hearts of Iron. Every
 - Online play for up to 8 players over WebRTC, with public and private lobbies and the same map settings
 - Empty or disconnected seats are taken over by an AI; players can rejoin and hosts can resume
 - Production: a national production screen for infantry, tanks, forts and factories that repeats every turn, with an AUTO planner
-- Tanks: strong on open ground, weaker in forests and mountains, limited by factory level; infantry absorb casualties first
+- Infantry, tanks and artillery: tanks rule open ground, artillery hits hard anywhere, both limited by factory levels; infantry absorb casualties first
+- New units deploy in any supplied province, front line included
+- Flanking bonus for attacks from several sides, an OFFENSIVE button for whole fronts, and one-tap splits across every enemy neighbor
+- Encirclement pockets: escalating attrition and surrender after 3 turns cut off
+- War length up to 60 turns (TOTAL WAR)
 - Redeployment: move divisions up to 4 provinces through your own land in one turn
 - AI that guards threatened fronts, shifts reserves by rail, picks a main enemy, builds tanks for offensives and test-runs its plan against predicted enemy moves before committing
 - Controls for touch and desktop: drag or right-click to order, Shift-drag box select, Ctrl-click multi-select, hover odds, undo, keyboard panning and zoom, optional map rotation on portrait screens
