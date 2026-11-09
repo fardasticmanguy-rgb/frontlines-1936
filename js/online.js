@@ -1,5 +1,5 @@
 import { planAiOrders } from "./ai.js";
-import { NATIONS, NATION_NAMES, NATION_TRAITS } from "./config.js";
+import { DEFAULT_TURNS, NATIONS, NATION_NAMES, NATION_TRAITS } from "./config.js";
 import { decodeOrders, decodeState, encodeOrders, encodeState } from "./codec.js";
 import { flagImage } from "./flags.js";
 import {
@@ -248,7 +248,7 @@ export async function openRoom(code, role, resume = false) {
     seatsKey: null,
     lobbyKey: null,
     timer: 45,
-    maxTurns: 15,
+    maxTurns: DEFAULT_TURNS,
     visibility: "private",
     hostMissingFor: 0,
     offlineFor: 0,
@@ -374,7 +374,7 @@ export function renderLobby() {
   const host = hostPeer();
   const settings =
     host && host.presence.timer !== undefined
-      ? ` (${host.presence.length || 15} months, ${host.presence.timer ? `${host.presence.timer}s turns` : "no timer"})`
+      ? ` (${host.presence.length || DEFAULT_TURNS} months, ${host.presence.timer ? `${host.presence.timer}s turns` : "no timer"})`
       : "";
   $("lobby-note").textContent = host
     ? `Connected! Waiting for the host to declare war…${settings}`

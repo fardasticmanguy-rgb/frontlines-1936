@@ -1,4 +1,14 @@
-import { BUILDING, NATION_COLORS, NATION_NAMES, NATIONS, TAU, clamp, isWinter } from "./config.js";
+import {
+  BUILDING,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+  NATION_COLORS,
+  NATION_NAMES,
+  NATIONS,
+  TAU,
+  clamp,
+  isWinter,
+} from "./config.js";
 import { flagCanvases } from "./flags.js";
 import { canPlan } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
@@ -221,13 +231,13 @@ function buildLayers() {
   g.strokeStyle = "rgba(190, 220, 225, 0.07)";
   g.lineWidth = 1;
   g.beginPath();
-  for (let x = 100; x < 1000; x += 100) {
+  for (let x = 100; x < MAP_WIDTH; x += 100) {
     g.moveTo(x, 0);
-    g.lineTo(x, 700);
+    g.lineTo(x, MAP_HEIGHT);
   }
-  for (let y = 100; y < 700; y += 100) {
+  for (let y = 100; y < MAP_HEIGHT; y += 100) {
     g.moveTo(0, y);
-    g.lineTo(1000, y);
+    g.lineTo(MAP_WIDTH, y);
   }
   g.stroke();
 
