@@ -1,6 +1,6 @@
 import { planAiOrders } from "./ai.js";
 import { playSound, unlockAudio } from "./audio.js";
-import { BUILD_COST, NATIONS, NATION_NAMES } from "./config.js";
+import { NATIONS, NATION_NAMES, isWinter } from "./config.js";
 import { generateMap } from "./map.js";
 import {
   hostBroadcast,
@@ -12,18 +12,26 @@ import {
 } from "./online.js";
 import { randomSeed } from "./random.js";
 import {
+  addBlast,
+  addFloater,
   addRing,
+  addShake,
   addSmoke,
   addSparks,
   arrowCurve,
   clearEffects,
   curvePoint,
   flashProvince,
+  sweepProvince,
 } from "./render.js";
 import {
+  attackStrength,
+  buildCost,
   createInitialState,
   defenseStrength,
+  divisionCount,
   emptyOrders,
+  income,
   ordersCost,
   resolveTurn,
   sanitizeOrders,
@@ -34,6 +42,7 @@ import {
   keepAwake,
   postFeed,
   postNews,
+  postWorldEvent,
   renderGameOver,
   renderPanel,
   renderTopBar,
@@ -64,6 +73,7 @@ export function newGame(mode, seats, seed, options = {}) {
     pointer: null,
     animation: null,
     hint: null,
+    report: null,
     timer: options.timer || 0,
     deadline: 0,
     lastTick: -1,
@@ -135,7 +145,7 @@ export function availableFrom(id) {
 
 export function industryLeft() {
   const game = store.game;
-  return game.state.industry[game.me] - ordersCost(game.orders[game.me]);
+  return game.state.industry[game.me] - ordersCost(game.orders[game.me], game.me);
 }
 
 export function ordersChanged() {
@@ -194,7 +204,7 @@ export function applyPanelAction(action, { from, to, id }) {
       const previous = orders.builds[id];
       delete orders.builds[id];
       if (previous === kind) break;
-      if (industryLeft() >= BUILD_COST[kind]) orders.builds[id] = kind;
+      if (industryLeft() >= buildCost(game.me, kind)) orders.builds[id] = kind;
       else {
         if (previous) orders.builds[id] = previous;
         toast("Not enough industry");
@@ -218,7 +228,9 @@ function computeHint() {
     for (const n of p.neighbors) {
       if (!map.provinces[n].land || game.state.owner[n] === game.me) continue;
       const score =
-        game.state.troops[p.id] - defenseStrength(map, game.state, n) + (map.provinces[n].city ? 3 : 0);
+        attackStrength(game.me, game.state.troops[p.id], game.state.turn) -
+        defenseStrength(map, game.state, n) +
+        (map.provinces[n].city ? 3 : 0);
       if (score > bestScore) {
         bestScore = score;
         game.hint = { from: p.id, to: n };
@@ -304,16 +316,28 @@ export function startAnimation(before, after, events) {
   renderPanel();
 }
 
-function reportCaptures(events) {
+function arrivalPoint(map, events, capture) {
+  const move = events.moves.find((m) => m.to === capture.province && m.nation === capture.to && m.stop >= 1);
+  const p = map.provinces[capture.province];
+  if (!move) return [p.x, p.y];
+  const curve = arrowCurve(map, move.from, move.to);
+  return [curve[4], curve[5]];
+}
+
+function reportCaptures(animation) {
   const { map } = store;
+  const { events, before } = animation;
   let captured = false;
   for (const c of events.captures) {
     const p = map.provinces[c.province];
     if (!p) continue;
     flashProvince(c.province);
+    sweepProvince(c.province, c.from, ...arrivalPoint(map, events, c));
     captured = true;
     if (c.to < 0) continue;
+    addFloater(p.x, p.y - 8, p.city ? "CAPTURED" : "TAKEN", p.city ? "#ffe08a" : "#fff3d6", 0.15);
     if (p.capitalOf >= 0 && c.from === p.capitalOf) {
+      addShake(10);
       postNews(
         `${p.name.toUpperCase()} HAS FALLEN`,
         `${NATION_NAMES[c.to]} troops march into the capital of ${NATION_NAMES[c.from]}.`,
@@ -324,7 +348,59 @@ function reportCaptures(events) {
       postFeed(`${NATION_NAMES[c.to]} took ${p.name}${from}`, c.to);
     }
   }
+  for (const id of events.battles) {
+    if (events.captures.some((c) => c.province === id)) continue;
+    const p = map.provinces[id];
+    const holder = before.owner[id];
+    if (p && holder >= 0) addFloater(p.x, p.y - 8, "HELD", "#cfe6ff", 0.15);
+  }
   return captured;
+}
+
+function reportAttrition(events) {
+  const { map } = store;
+  for (const a of events.attrition || []) {
+    const p = map.provinces[a.province];
+    if (!p) continue;
+    addFloater(p.x, p.y + 4, `−${a.lost} SUPPLY`, "#ff9b7a", 0.6);
+  }
+}
+
+function reportSeason(before, after) {
+  if (isWinter(after.turn) && !isWinter(before.turn)) {
+    postNews("WINTER SETS IN", "Frozen roads slow every offensive. Attacks are 20% weaker until March.", -1);
+    playSound("wind");
+  } else if (!isWinter(after.turn) && isWinter(before.turn)) {
+    postNews("THE THAW", "Spring returns to the front. Offensives regain their full strength.", -1);
+  }
+}
+
+function reportWorldEvent(event) {
+  if (!event) return;
+  const { map } = store;
+  const p = map.provinces[event.province];
+  if (p) {
+    addRing(p.x, p.y, 34, event.kind === "partisans" ? "#ff8a6b" : "#9fe07f", 1);
+    flashProvince(p.id);
+  }
+  postWorldEvent(event);
+  playSound("news");
+}
+
+function buildReport(animation) {
+  const { game, map } = store;
+  const { before, after, events } = animation;
+  const me = game.me;
+  if (me < 0 || !before.alive[me]) return null;
+  return {
+    gained: events.captures.filter((c) => c.to === me).length,
+    lost: events.captures.filter((c) => c.from === me && c.to !== me).length,
+    attrition: (events.attrition || [])
+      .filter((a) => after.owner[a.province] === me)
+      .reduce((sum, a) => sum + a.lost, 0),
+    divisions: divisionCount(after, me) - divisionCount(before, me),
+    income: income(map, after, me),
+  };
 }
 
 export function applyAnimation() {
@@ -333,14 +409,22 @@ export function applyAnimation() {
   animation.applied = true;
   game.state = animation.after;
 
-  let fighting = false;
+  let fighting = 0;
   for (const id of animation.events.battles) {
     const p = map.provinces[id];
     if (!p) continue;
     addRing(p.x, p.y, 40, "#f1cf6b", 0.7);
     addSparks(p.x, p.y, "#ffcf6a", 14, 80);
     addSmoke(p.x, p.y);
-    fighting = true;
+    for (let k = 0; k < 3; k++) {
+      addBlast(
+        p.x + (Math.random() - 0.5) * 26,
+        p.y + (Math.random() - 0.5) * 20,
+        14 + Math.random() * 10,
+        k * 0.14,
+      );
+    }
+    fighting++;
   }
   for (const m of animation.events.moves) {
     if (m.stop >= 1) continue;
@@ -348,10 +432,16 @@ export function applyAnimation() {
     addRing(x, y, 26, "#ffcf6a", 0.6);
     addSparks(x, y, "#ffcf6a", 10, 70);
     addSmoke(x, y);
-    fighting = true;
+    addBlast(x, y, 16, 0);
+    fighting++;
   }
+  if (fighting) addShake(Math.min(9, 2.5 + fighting * 0.8));
 
-  const captured = reportCaptures(animation.events);
+  const captured = reportCaptures(animation);
+  reportAttrition(animation.events);
+  reportSeason(animation.before, animation.after);
+  reportWorldEvent(animation.events.world);
+  game.report = buildReport(animation);
   for (const n of NATIONS) {
     if (animation.before.alive[n] && !animation.after.alive[n]) {
       postNews(`${NATION_NAMES[n]} CAPITULATES`, `The government of ${NATION_NAMES[n]} has collapsed.`, n);

@@ -1,5 +1,19 @@
-import { BUILD_COST, BUILDING, NEUTRAL } from "./config.js";
-import { defenseMultiplier, emptyOrders } from "./rules.js";
+import { BUILDING, NEUTRAL } from "./config.js";
+import { attackMultiplier, buildCost, defenseMultiplier, emptyOrders, supplyNetwork } from "./rules.js";
+
+function encirclementGain(map, state, nation, target) {
+  const enemy = state.owner[target];
+  if (enemy === NEUTRAL) return 0;
+  const owner = state.owner.slice();
+  owner[target] = nation;
+  const before = supplyNetwork(map, state);
+  const after = supplyNetwork(map, { owner });
+  let cut = 0;
+  for (const p of map.provinces) {
+    if (owner[p.id] === enemy && before[p.id] && !after[p.id]) cut += 1 + state.troops[p.id] * 0.15;
+  }
+  return cut;
+}
 
 function frontDistances(provinces, owns, mine) {
   const distance = new Array(provinces.length).fill(Infinity);
@@ -43,22 +57,25 @@ export function planAiOrders(map, state, nation) {
   const cities = mine.filter((id) => provinces[id].city);
   const factories = mine.filter((id) => state.buildings[id] === BUILDING.FACTORY).length;
   const factoryTarget = state.turn < 8 ? 2 : 3;
-  if (!lateGame && factories < factoryTarget && budget >= BUILD_COST[BUILDING.FACTORY] + 4) {
+  const factoryCost = buildCost(nation, BUILDING.FACTORY);
+  const fortCost = buildCost(nation, BUILDING.FORT);
+  const attack = attackMultiplier(nation, state.turn);
+  if (!lateGame && factories < factoryTarget && budget >= factoryCost + 4) {
     const site = cities
       .filter((id) => state.buildings[id] === BUILDING.NONE)
       .sort((a, b) => distance[b] - distance[a] || a - b)[0];
     if (site !== undefined && threat(site) <= state.troops[site]) {
       orders.builds[site] = BUILDING.FACTORY;
-      budget -= BUILD_COST[BUILDING.FACTORY];
+      budget -= factoryCost;
     }
   }
 
   for (const id of cities) {
     if (state.buildings[id] !== BUILDING.NONE || orders.builds[id]) continue;
     const exposed = threat(id) > state.troops[id] * defenseMultiplier(map, state, id);
-    if (exposed && budget >= BUILD_COST[BUILDING.FORT] + 3) {
+    if (exposed && budget >= fortCost + 3) {
       orders.builds[id] = BUILDING.FORT;
-      budget -= BUILD_COST[BUILDING.FORT];
+      budget -= fortCost;
       break;
     }
   }
@@ -95,11 +112,12 @@ export function planAiOrders(map, state, nation) {
     .map((target) => {
       const enemy = state.owner[target] !== NEUTRAL;
       const defense = state.troops[target] * defenseMultiplier(map, state, target);
-      const need = Math.ceil(defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) + 1;
+      const need = Math.ceil((defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) / attack) + 1;
       const value =
         (provinces[target].city ? 5 : 1) +
         (provinces[target].capitalOf >= 0 ? 8 : 0) +
-        (enemy ? 1.5 : 0.5) -
+        (enemy ? 1.5 : 0.5) +
+        encirclementGain(map, state, nation, target) -
         need * 0.15;
       return { target, need, enemy, value };
     })

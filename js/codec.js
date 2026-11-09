@@ -1,5 +1,5 @@
 import { DEFAULT_TURNS, NATIONS, NEUTRAL } from "./config.js";
-import { emptyOrders } from "./rules.js";
+import { WORLD_EVENTS, emptyOrders } from "./rules.js";
 
 const UNOWNED = 9;
 
@@ -13,12 +13,19 @@ export function encodeState(state, { deadline = -1, ready = [], absent = [] } = 
   const provinces = state.owner
     .map((o, i) => [o === NEUTRAL ? UNOWNED : o, state.troops[i], state.buildings[i]].join(","))
     .join(";");
-  const e = events || { moves: [], battles: [], captures: [] };
+  const e = { moves: [], battles: [], captures: [], attrition: [], world: null, ...events };
   const moves = e.moves.map((m) => [m.nation, m.from, m.to, m.sent, m.stop < 1 ? 1 : 0].join(",")).join(";");
   const captures = e.captures
     .map((c) => [c.province, c.from === NEUTRAL ? UNOWNED : c.from, c.to].join(","))
     .join(";");
-  return [header, nations, provinces, moves, e.battles.join(","), captures].join("|");
+  const attrition = e.attrition.map((a) => [a.province, a.lost].join(",")).join(";");
+  const w = e.world;
+  const world = w
+    ? [WORLD_EVENTS.indexOf(w.kind), w.nation === NEUTRAL ? UNOWNED : w.nation, w.province, w.amount].join(
+        ",",
+      )
+    : "";
+  return [header, nations, provinces, moves, e.battles.join(","), captures, attrition, world].join("|");
 }
 
 function isOwner(value) {
@@ -70,7 +77,7 @@ export function decodeState(text, provinceCount) {
     state.industry.every(Number.isFinite);
   if (!valid) return null;
 
-  const events = { moves: [], battles: [], captures: [] };
+  const events = { moves: [], battles: [], captures: [], attrition: [], world: null };
   if (parts[3]) {
     events.moves = parts[3]
       .split(";")
@@ -84,6 +91,24 @@ export function decodeState(text, provinceCount) {
       const [province, from, to] = numbers(row);
       return { province, from: from === UNOWNED ? NEUTRAL : from, to };
     });
+  }
+  if (parts[6]) {
+    events.attrition = parts[6]
+      .split(";")
+      .map(numbers)
+      .filter(([province, lost]) => Number.isInteger(province) && lost > 0)
+      .map(([province, lost]) => ({ province, lost }));
+  }
+  if (parts[7]) {
+    const [kind, nation, province, amount] = numbers(parts[7]);
+    if (WORLD_EVENTS[kind]) {
+      events.world = {
+        kind: WORLD_EVENTS[kind],
+        nation: nation === UNOWNED ? NEUTRAL : nation,
+        province,
+        amount,
+      };
+    }
   }
 
   return { state, ready, absent, deadline, events };

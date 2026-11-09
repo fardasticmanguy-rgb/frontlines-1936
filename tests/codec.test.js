@@ -16,6 +16,19 @@ test("state survives an encode/decode round trip", () => {
   assert.equal(decoded.deadline, 30);
 });
 
+test("turn events survive an encode/decode round trip", () => {
+  const state = createInitialState(map);
+  const events = {
+    moves: [{ nation: 1, from: 3, to: 7, sent: 5, stop: 0.5 }],
+    battles: [7],
+    captures: [{ province: 7, from: -1, to: 1 }],
+    attrition: [{ province: 9, lost: 2 }],
+    world: { kind: "harvest", nation: -1, province: -1, amount: 2 },
+  };
+  const decoded = decodeState(encodeState(state, {}, events), map.provinces.length);
+  assert.deepEqual(decoded.events, events);
+});
+
 test("malformed or tampered state is rejected", () => {
   const text = encodeState(createInitialState(map));
   assert.equal(decodeState("garbage", map.provinces.length), null);
