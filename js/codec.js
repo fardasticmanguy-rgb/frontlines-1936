@@ -1,21 +1,31 @@
 import { DEFAULT_TURNS, NATIONS, NEUTRAL } from "./config.js";
-import { KEEP_OFFER, MAX_FACTORY_LEVEL, WORLD_EVENTS, emptyOrders } from "./rules.js";
+import { DEFAULT_RULES, KEEP_OFFER, MAX_FACTORY_LEVEL, WORLD_EVENTS, emptyOrders } from "./rules.js";
 
 const UNOWNED = 9;
-const DIPLOMACY_KINDS = ["offer", "alliance", "break"];
+const DIPLOMACY_KINDS = ["offer", "form", "join", "leave", "aid"];
 
 const numbers = (text) => text.split(",").map(Number);
 
 export function encodeState(state, { deadline = -1, ready = [], absent = [] } = {}, events = null) {
-  const header = [state.turn, state.winner, deadline, state.maxTurns].join(",");
+  const rules = state.rules ?? DEFAULT_RULES;
+  const header = [
+    state.turn,
+    state.winner,
+    deadline,
+    state.maxTurns,
+    state.firstTurn ?? 1,
+    rules.winter ? 1 : 0,
+    rules.events ? 1 : 0,
+  ].join(",");
   const nations = NATIONS.map((n) =>
     [
       state.industry[n],
       state.alive[n],
       ready[n] ? 1 : 0,
       absent[n] ? 1 : 0,
-      state.allies[n] ?? NEUTRAL,
+      state.faction[n] ?? NEUTRAL,
       state.offers[n] ?? NEUTRAL,
+      state.bonus?.[n] ?? 0,
     ].join(","),
   ).join(";");
   const provinces = state.owner
@@ -35,7 +45,9 @@ export function encodeState(state, { deadline = -1, ready = [], absent = [] } = 
         ",",
       )
     : "";
-  const diplomacy = e.diplomacy.map((d) => [DIPLOMACY_KINDS.indexOf(d.kind), d.a, d.b].join(",")).join(";");
+  const diplomacy = e.diplomacy
+    .map((d) => [DIPLOMACY_KINDS.indexOf(d.kind), d.a, d.b, d.amount || 0].join(","))
+    .join(";");
   return [header, nations, provinces, moves, e.battles.join(","), captures, attrition, world, diplomacy].join(
     "|",
   );
@@ -49,13 +61,14 @@ export function decodeState(text, provinceCount) {
   const parts = String(text).split("|");
   if (parts.length < 6) return null;
 
-  const [turn, winner, deadline, maxTurns] = numbers(parts[0]);
+  const [turn, winner, deadline, maxTurns, firstTurn, winter, worldEvents] = numbers(parts[0]);
   if (!Number.isInteger(turn) || turn < 1 || !Number.isInteger(winner)) return null;
   if (winner < -1 || winner > NATIONS.length) return null;
 
   const state = {
     turn,
     winner,
+    firstTurn: firstTurn || 1,
     maxTurns: maxTurns || DEFAULT_TURNS,
     owner: [],
     troops: [],
@@ -63,23 +76,23 @@ export function decodeState(text, provinceCount) {
     factories: [],
     industry: [],
     alive: [],
-    allies: [],
+    faction: [],
     offers: [],
+    bonus: [],
+    rules: { winter: winter === 0 ? 0 : 1, events: worldEvents === 0 ? 0 : 1 },
   };
   const ready = [];
   const absent = [];
 
   parts[1].split(";").forEach((row, n) => {
-    const [industry, alive, isReady, isAbsent, ally, offer] = numbers(row);
+    const [industry, alive, isReady, isAbsent, faction, offer, bonus] = numbers(row);
     state.industry[n] = industry || 0;
     state.alive[n] = alive ? 1 : 0;
     ready[n] = isReady ? 1 : 0;
     absent[n] = isAbsent ? 1 : 0;
-    state.allies[n] = NATIONS.includes(ally) && ally !== n ? ally : NEUTRAL;
+    state.faction[n] = NATIONS.includes(faction) ? faction : NEUTRAL;
     state.offers[n] = NATIONS.includes(offer) && offer !== n ? offer : NEUTRAL;
-  });
-  state.allies.forEach((ally, n) => {
-    if (ally >= 0 && state.allies[ally] !== n) state.allies[n] = NEUTRAL;
+    state.bonus[n] = Number.isInteger(bonus) && bonus >= -50 && bonus <= 100 ? bonus : 0;
   });
 
   parts[2].split(";").forEach((row, i) => {
@@ -139,7 +152,7 @@ export function decodeState(text, provinceCount) {
       .split(";")
       .map(numbers)
       .filter(([kind, a, b]) => DIPLOMACY_KINDS[kind] && NATIONS.includes(a) && NATIONS.includes(b))
-      .map(([kind, a, b]) => ({ kind: DIPLOMACY_KINDS[kind], a, b }));
+      .map(([kind, a, b, amount]) => ({ kind: DIPLOMACY_KINDS[kind], a, b, amount: amount || 0 }));
   }
 
   return { state, ready, absent, deadline, events };
@@ -153,7 +166,12 @@ export function encodeOrders(orders) {
   const builds = Object.keys(orders.builds)
     .map((id) => `${id}:${orders.builds[id]}`)
     .join(",");
-  const diplomacy = [orders.offer ?? KEEP_OFFER, orders.breakAlliance ? 1 : 0].join(":");
+  const diplomacy = [
+    orders.offer ?? KEEP_OFFER,
+    orders.breakAlliance ? 1 : 0,
+    orders.aidTo ?? NEUTRAL,
+    orders.aidAmount || 0,
+  ].join(":");
   return [moves, recruits, builds, diplomacy].join("/");
 }
 
@@ -172,8 +190,12 @@ export function decodeOrders(text) {
   for (const v of rows(moves)) if (v.length === 3) orders.moves.push({ from: v[0], to: v[1], count: v[2] });
   for (const v of rows(recruits)) if (v.length === 2) orders.recruits[v[0]] = v[1];
   for (const v of rows(builds)) if (v.length === 2) orders.builds[v[0]] = v[1];
-  const [offer, breakAlliance] = (diplomacy || "").split(":").map(Number);
+  const [offer, breakAlliance, aidTo, aidAmount] = (diplomacy || "").split(":").map(Number);
   if (Number.isInteger(offer)) orders.offer = offer;
   orders.breakAlliance = breakAlliance === 1 ? 1 : 0;
+  if (Number.isInteger(aidTo) && Number.isInteger(aidAmount)) {
+    orders.aidTo = aidTo;
+    orders.aidAmount = aidAmount;
+  }
   return orders;
 }

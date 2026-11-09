@@ -8,13 +8,14 @@ const map = generateMap(12345);
 
 test("state survives an encode/decode round trip", () => {
   const state = createInitialState(map);
-  state.allies = [3, -1, -1, 0];
-  state.offers = [-1, 2, -1, -1];
+  state.faction = [0, -1, -1, 0, -1, -1, -1, -1];
+  state.offers = [-1, 2, -1, -1, -1, -1, -1, -1];
+  state.rules = { winter: 0, events: 1 };
   const text = encodeState(state, { deadline: 30, ready: [1, 0, 1, 0], absent: [0, 0, 1, 0] });
   const decoded = decodeState(text, map.provinces.length);
   assert.deepEqual(decoded.state, state);
-  assert.deepEqual(decoded.ready, [1, 0, 1, 0]);
-  assert.deepEqual(decoded.absent, [0, 0, 1, 0]);
+  assert.deepEqual(decoded.ready, [1, 0, 1, 0, 0, 0, 0, 0]);
+  assert.deepEqual(decoded.absent, [0, 0, 1, 0, 0, 0, 0, 0]);
   assert.equal(decoded.deadline, 30);
 });
 
@@ -27,8 +28,9 @@ test("turn events survive an encode/decode round trip", () => {
     attrition: [{ province: 9, lost: 2 }],
     world: { kind: "harvest", nation: -1, province: -1, amount: 2 },
     diplomacy: [
-      { kind: "offer", a: 0, b: 2 },
-      { kind: "alliance", a: 1, b: 3 },
+      { kind: "offer", a: 0, b: 2, amount: 0 },
+      { kind: "form", a: 1, b: 3, amount: 0 },
+      { kind: "aid", a: 2, b: 1, amount: 5 },
     ],
   };
   const decoded = decodeState(encodeState(state, {}, events), map.provinces.length);
@@ -40,7 +42,7 @@ test("malformed or tampered state is rejected", () => {
   assert.equal(decodeState("garbage", map.provinces.length), null);
   assert.equal(decodeState(text, map.provinces.length + 1), null);
   const parts = text.split("|");
-  parts[2] = parts[2].replace(/^\d+/, "7");
+  parts[2] = parts[2].replace(/^\d+/, "8");
   assert.equal(decodeState(parts.join("|"), map.provinces.length), null);
 });
 
@@ -51,6 +53,8 @@ test("orders survive an encode/decode round trip", () => {
     builds: { 12: 2 },
     offer: 2,
     breakAlliance: 1,
+    aidTo: 3,
+    aidAmount: 4,
   };
   assert.deepEqual(decodeOrders(encodeOrders(orders)), orders);
 });
