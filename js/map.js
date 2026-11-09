@@ -1,20 +1,40 @@
-import { MAP_HEIGHT, MAP_WIDTH } from "./config.js";
+import { MAP_HEIGHT, MAP_WIDTH, MAX_NATIONS, applyRoster, clamp } from "./config.js";
+import { MAP_SIZES, RANDOM_ROSTER } from "./nations.js";
+import { generateEurope } from "./scenarios/europe.js";
 import { centroid, distanceSquared, voronoiCell } from "./geometry.js";
 import { createRng, createValueNoise } from "./random.js";
 
-const SITE_COUNT = 150;
 const SITE_CANDIDATES = 14;
 const RELAX_PASSES = 2;
 const LAND_SHARE = 0.86;
-const EXTRA_CITIES = 18;
+const CITY_SHARE = 0.12;
 const BOUNDS_PADDING = 26;
 
-const CAPITAL_ANCHORS = [
+const CORNERS = [
   [0.15, 0.2],
   [0.85, 0.2],
   [0.15, 0.8],
   [0.85, 0.8],
-].map(([x, y]) => [x * MAP_WIDTH, y * MAP_HEIGHT]);
+];
+
+function capitalAnchors(count) {
+  const points =
+    count === 4
+      ? CORNERS
+      : Array.from({ length: count }, (_, k) => {
+          const angle = Math.PI + (2 * Math.PI * k) / count;
+          return [0.5 + Math.cos(angle) * 0.37, 0.5 + Math.sin(angle) * 0.35];
+        });
+  return points.map(([x, y]) => [x * MAP_WIDTH, y * MAP_HEIGHT]);
+}
+
+export function normalizeMapOptions(options = {}) {
+  return {
+    scenario: options.scenario === "europe" ? "europe" : "random",
+    nations: clamp(Math.floor(Number(options.nations) || 4), 2, MAX_NATIONS),
+    size: MAP_SIZES[options.size] ? options.size : "medium",
+  };
+}
 
 const NAME_HEADS = [
   "Vel",
@@ -83,9 +103,9 @@ const NAME_TAILS = [
   "ach",
 ];
 
-function scatterSites(rng) {
+function scatterSites(rng, count) {
   const sites = [];
-  while (sites.length < SITE_COUNT) {
+  while (sites.length < count) {
     let best = null;
     let bestDistance = -1;
     for (let k = 0; k < SITE_CANDIDATES; k++) {
@@ -148,9 +168,9 @@ function linkNeighbors(provinces) {
   return edges;
 }
 
-function raiseLand(provinces, rng) {
+function raiseLand(provinces, rng, anchors) {
   const k = MAP_WIDTH / 1000;
-  const blobs = CAPITAL_ANCHORS.map(([x, y]) => [x, y, (250 + rng() * 60) * k]);
+  const blobs = anchors.map(([x, y]) => [x, y, (250 + rng() * 60) * k]);
   blobs.push([MAP_WIDTH / 2, MAP_HEIGHT / 2, (320 + rng() * 60) * k]);
   for (let i = 0; i < 4; i++) {
     blobs.push([MAP_WIDTH * (0.2 + rng() * 0.6), MAP_HEIGHT * (0.15 + rng() * 0.7), (170 + rng() * 90) * k]);
@@ -213,9 +233,9 @@ function assignTerrain(provinces, rng) {
   }
 }
 
-function placeCapitals(provinces) {
+function placeCapitals(provinces, anchors) {
   const capitals = [];
-  CAPITAL_ANCHORS.forEach(([ax, ay], nation) => {
+  anchors.forEach(([ax, ay], nation) => {
     let best = -1;
     let bestDistance = Infinity;
     for (const p of provinces) {
@@ -233,9 +253,9 @@ function placeCapitals(provinces) {
   return capitals;
 }
 
-function placeCities(provinces, capitals) {
+function placeCities(provinces, capitals, extra) {
   const cities = capitals.slice();
-  for (let k = 0; k < EXTRA_CITIES; k++) {
+  for (let k = 0; k < extra; k++) {
     let best = -1;
     let bestSpread = -1;
     for (const p of provinces) {
@@ -309,9 +329,14 @@ function fingerprint(provinces) {
   return hash;
 }
 
-export function generateMap(seed) {
+export function generateMap(seed, rawOptions) {
+  const options = normalizeMapOptions(rawOptions);
+  if (options.scenario === "europe") return generateEurope(seed);
+  applyRoster(RANDOM_ROSTER);
   const rng = createRng(seed);
-  const sites = relaxSites(scatterSites(rng));
+  const siteCount = MAP_SIZES[options.size].sites;
+  const anchors = capitalAnchors(options.nations);
+  const sites = relaxSites(scatterSites(rng, siteCount));
 
   const provinces = sites.map(([x, y], id) => {
     const polygon = voronoiCell(sites, id, MAP_WIDTH, MAP_HEIGHT);
@@ -331,15 +356,21 @@ export function generateMap(seed) {
   });
 
   const edges = linkNeighbors(provinces);
-  raiseLand(provinces, rng);
+  raiseLand(provinces, rng, anchors);
   keepLargestLandmass(provinces);
   assignTerrain(provinces, rng);
-  const capitals = placeCapitals(provinces);
-  const cities = placeCities(provinces, capitals);
+  const capitals = placeCapitals(provinces, anchors);
+  const cities = placeCities(provinces, capitals, Math.round(siteCount * CITY_SHARE));
   nameProvinces(provinces, rng);
 
   return {
     seed,
+    options,
+    scenario: "random",
+    nationCount: options.nations,
+    roster: RANDOM_ROSTER,
+    firstTurn: 1,
+    links: [],
     provinces,
     edges,
     capitals,
