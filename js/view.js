@@ -1,7 +1,34 @@
 import { MAP_HEIGHT, MAP_WIDTH, clamp } from "./config.js";
 import { store } from "./store.js";
 
-const MAX_ZOOM = 3.2;
+const MAX_ZOOM = 6;
+const ROTATE_KEY = "frontlines.rotateMap";
+
+export const ROTATE_MODES = ["auto", "on", "off"];
+
+function loadRotate() {
+  try {
+    const saved = localStorage.getItem(ROTATE_KEY);
+    return ROTATE_MODES.includes(saved) ? saved : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+export const viewSettings = { rotate: loadRotate() };
+
+export function cycleRotate() {
+  viewSettings.rotate = ROTATE_MODES[(ROTATE_MODES.indexOf(viewSettings.rotate) + 1) % ROTATE_MODES.length];
+  try {
+    localStorage.setItem(ROTATE_KEY, viewSettings.rotate);
+  } catch {}
+  return viewSettings.rotate;
+}
+
+function rotationAllowed() {
+  if (viewSettings.rotate === "auto") return store.map?.scenario !== "europe";
+  return viewSettings.rotate === "on";
+}
 const MAX_LAYER_PIXELS = 7e6;
 const FULL_MAP = { x0: 0, y0: 0, x1: MAP_WIDTH, y1: MAP_HEIGHT };
 
@@ -55,7 +82,7 @@ export function updateLayout() {
     const h = mapBounds.y1 - mapBounds.y0;
     const upright = Math.min(view.width / w, available / h);
     const sideways = Math.min(view.width / h, available / w);
-    rotated = sideways > upright * 1.12;
+    rotated = rotationAllowed() && sideways > upright * 1.12;
     if (rotated !== view.rotated) resetZoom(game);
   }
   view.rotated = rotated;
