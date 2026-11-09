@@ -13,6 +13,16 @@ export const EUROPE_ROSTER = [
 ];
 
 const OWNERS = { GER: 0, UK: 1, FRA: 2, SOV: 3, ITA: 4, POL: 5, SPA: 6, TUR: 7 };
+const STARTING_KIT = [
+  [8, 6],
+  [1, 3],
+  [3, 6],
+  [6, 6],
+  [1, 3],
+  [1, 3],
+  [0, 2],
+  [0, 2],
+];
 const FIRST_TURN = 43;
 const GARRISON_BONUS = { FRA: 1, POL: 1, UK: 1 };
 const INDUSTRY = [10, 12, 12, 12, 8, 8, 6, 6];
@@ -166,6 +176,8 @@ function buildEurope() {
     factories: new Array(count).fill(0),
     industry: NATIONS.map((n) => INDUSTRY[n] ?? 0),
     faction: NATIONS.map((n) => FACTIONS[n] ?? NEUTRAL),
+    armor: new Array(count).fill(0),
+    guns: new Array(count).fill(0),
   };
   for (const p of provinces.slice(0, landCount)) {
     start.owner[p.id] = OWNERS[p.owner] ?? NEUTRAL;
@@ -174,6 +186,21 @@ function buildEurope() {
     const factory = p.flags.find((f) => /^F\d$/.test(f));
     start.factories[p.id] = factory ? Number(factory[1]) : 0;
   }
+  STARTING_KIT.forEach(([tanks, guns], nation) => {
+    const strongest = provinces
+      .slice(0, landCount)
+      .filter((p) => start.owner[p.id] === nation)
+      .sort((a, b) => start.troops[b.id] - start.troops[a.id] || a.id - b.id);
+    const place = (key, amount) => {
+      for (let k = 0; k < amount && strongest.length; k++) {
+        const id = strongest[k % Math.min(4, strongest.length)].id;
+        start.troops[id]++;
+        start[key][id]++;
+      }
+    };
+    place("armor", tanks);
+    place("guns", guns);
+  });
 
   const capitals = NATIONS.slice(0, EUROPE_ROSTER.length).map((n) =>
     provinces.findIndex((p) => p.capitalOf === n),
