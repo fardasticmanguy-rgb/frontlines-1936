@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1c1e18" />
+    <meta name="description" content="A four-player simultaneous-turn strategy game for tablets." />
+    <title>Frontlines 1936</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Roboto+Condensed:wght@400;700&display=swap"
+    />
+    <link rel="stylesheet" href="css/style.css" />
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <canvas id="map"></canvas>
+
+    <section id="menu" class="screen on">
+      <div class="card">
+        <h1>FRONTLINES</h1>
+        <p class="kicker">1936 · FOUR NATIONS · ONE CONTINENT</p>
+        <button class="btn go" id="play-online">PLAY ONLINE</button>
+        <button class="btn" id="resume-game" hidden>RESUME</button>
+        <button class="btn" id="practice">PRACTICE VS AI</button>
+        <button class="btn small" id="how-to-play">HOW TO PLAY</button>
+      </div>
+    </section>
+
+    <section id="online" class="screen">
+      <div class="card">
+        <h2>ONLINE WAR</h2>
+        <p class="note" id="online-note">Connecting…</p>
+        <label class="field">
+          <span>COMMANDER NAME</span>
+          <input id="commander-name" maxlength="16" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="section-title">PUBLIC GAMES</div>
+        <div id="public-games" class="listings"></div>
+        <button class="btn go" id="host-game">HOST A GAME</button>
+        <div class="divider">— OR JOIN WITH A CODE —</div>
+        <input
+          id="code-input"
+          class="code-input"
+          maxlength="4"
+          placeholder="CODE"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+        />
+        <button class="btn" id="join-game">JOIN GAME</button>
+        <button class="btn small" id="online-back">BACK</button>
+      </div>
+    </section>
+
+    <section id="lobby" class="screen">
+      <div class="card">
+        <p class="kicker">GAME CODE</p>
+        <div class="code" id="lobby-code">----</div>
+        <p class="note" id="lobby-link"></p>
+        <div class="seats" id="lobby-seats"></div>
+        <div class="option-row" id="option-visibility">
+          <span class="option-label">LOBBY</span>
+          <button data-value="private">PRIVATE</button>
+          <button data-value="public">PUBLIC</button>
+        </div>
+        <div class="option-row" id="option-timer">
+          <span class="option-label">TURN TIMER</span>
+          <button data-value="0">OFF</button>
+          <button data-value="30">30s</button>
+          <button data-value="45">45s</button>
+          <button data-value="60">60s</button>
+        </div>
+        <div class="option-row" id="option-length">
+          <span class="option-label">LENGTH</span>
+          <button data-value="10">QUICK · 10</button>
+          <button data-value="15">NORMAL · 15</button>
+          <button data-value="24">LONG · 24</button>
+        </div>
+        <button class="btn go" id="launch">DECLARE WAR</button>
+        <p class="note" id="lobby-note"></p>
+        <button class="btn small" id="leave-lobby">LEAVE</button>
+      </div>
+    </section>
+
+    <section id="help" class="screen">
+      <div class="card">
+        <h2>HOW TO PLAY</h2>
+        <div class="rules">
+          <p>• Everyone plans at the same time, then <b>all orders happen at once</b>.</p>
+          <p>
+            • <b>Drag</b> from your land onto a neighboring province to send divisions. Tap your province to
+            change how many go.
+          </p>
+          <p>
+            • <b>No dice.</b> The bigger army wins and keeps the difference. Defenders get bonuses:
+            <b>forest ×1.25</b>, <b>mountains ×1.5</b>, <b>fort +0.5</b>, <b>capital +0.25</b>.
+          </p>
+          <p>• Two armies attacking each other meet in the middle and fight there.</p>
+          <p>
+            • Each turn you earn <b>⚙ industry</b>. Spend it in your cities: <b>train divisions</b> (1 ⚙ each,
+            ready next turn), build a <b>fort</b> (6) or a <b>factory</b> (10, +3 ⚙ every turn).
+          </p>
+          <p>
+            • Cities ■ are worth 1 victory point and capitals ★ are worth 3. Hit the VP goal, be the last
+            nation left, or lead when the final month ends.
+          </p>
+          <p>
+            • <b>Pinch</b> to zoom and drag with <b>two fingers</b> to move the map. Tap ⤢ to zoom back out.
+          </p>
+        </div>
+        <button class="btn go" id="help-close">GOT IT</button>
+      </div>
+    </section>
+
+    <section id="over" class="screen">
+      <div class="card">
+        <p class="kicker" id="over-kicker">VICTORY</p>
+        <img id="over-flag" class="big-flag" alt="" />
+        <h2 id="over-title"></h2>
+        <div class="seats" id="over-standings"></div>
+        <button class="btn go" id="over-again">PLAY AGAIN</button>
+        <p class="note" id="over-note"></p>
+        <button class="btn small" id="over-menu">MAIN MENU</button>
+      </div>
+    </section>
+
+    <section id="pause" class="screen">
+      <div class="card">
+        <h2>PAUSE MENU</h2>
+        <p class="note" id="pause-note"></p>
+        <button class="btn" id="pause-resume">BACK TO THE WAR</button>
+        <button class="btn small" id="pause-help">HOW TO PLAY</button>
+        <button class="btn small" id="pause-sound">SOUND: ON</button>
+        <button class="btn red" id="pause-quit">LEAVE GAME</button>
+      </div>
+    </section>
+
+    <header id="top-bar" hidden>
+      <div class="nation-box">
+        <img id="nation-flag" alt="" />
+        <div id="nation-name"></div>
+      </div>
+      <div class="stat" id="stat-industry"></div>
+      <div class="stat optional" id="stat-factories"></div>
+      <div class="stat" id="stat-victory"></div>
+      <div class="date-box">
+        <div id="date"></div>
+        <div id="clock"></div>
+      </div>
+      <div id="nations"></div>
+      <button id="end-turn">END TURN</button>
+      <button class="icon-button" id="menu-button" aria-label="Menu">☰</button>
+    </header>
+
+    <footer id="panel" hidden></footer>
+    <div id="feed"></div>
+    <div id="news" hidden>
+      <div class="news-kicker">NEWS</div>
+      <div class="news-title" id="news-title"></div>
+      <img id="news-flag" alt="" />
+      <div class="news-text" id="news-text"></div>
+    </div>
+    <div id="banner" hidden></div>
+    <div id="toast" hidden></div>
+    <button class="icon-button" id="fit-button" aria-label="Zoom out" hidden>⤢</button>
+  </body>
+</html>
