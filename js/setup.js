@@ -3,7 +3,7 @@ import { flagUrlFor } from "./flags.js";
 import { newGame } from "./game.js";
 import { RANDOM_ROSTER } from "./nations.js";
 import { randomSeed } from "./random.js";
-import { EUROPE_ROSTER } from "./scenarios/europe.js";
+import { EUROPE_ROSTER, isEuropean } from "./scenarios/europe.js";
 
 const KEY = "flSetup";
 const DEFAULTS = {
@@ -37,11 +37,11 @@ function save() {
 }
 
 export function rosterFor(scenario) {
-  return scenario === "europe" ? EUROPE_ROSTER : RANDOM_ROSTER;
+  return isEuropean(scenario) ? EUROPE_ROSTER : RANDOM_ROSTER;
 }
 
 export function nationCountFor(options) {
-  return options.scenario === "europe" ? EUROPE_ROSTER.length : Math.min(MAX_NATIONS, options.nations);
+  return isEuropean(options.scenario) ? EUROPE_ROSTER.length : Math.min(MAX_NATIONS, options.nations);
 }
 
 function seatsFor(count) {
@@ -57,7 +57,7 @@ function syncRow(id, value) {
 }
 
 export function renderSetup() {
-  const europe = setup.scenario === "europe";
+  const europe = isEuropean(setup.scenario);
   syncRow("setup-scenario", setup.scenario);
   syncRow("setup-nations", setup.nations);
   syncRow("setup-size", setup.size);
@@ -104,7 +104,7 @@ export function renderSetup() {
 }
 
 export function setupOption(key, value) {
-  if (key === "scenario") setup.scenario = value === "europe" ? "europe" : "random";
+  if (key === "scenario") setup.scenario = isEuropean(value) ? value : "random";
   else if (key === "size") setup.size = value;
   else if (key === "difficulty") setup.difficulty = value;
   else setup[key] = Number(value);

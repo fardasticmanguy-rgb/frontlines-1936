@@ -55,6 +55,7 @@ export function emptyOrders() {
     tanks: {},
     artillery: {},
     builds: {},
+    declare: NEUTRAL,
     offer: KEEP_OFFER,
     breakAlliance: 0,
     aidTo: NEUTRAL,
@@ -72,8 +73,26 @@ export function areAllied(state, a, b) {
   );
 }
 
+const ALL_WARS = 0xff;
+
+export function atWar(state, a, b) {
+  if (a < 0 || b < 0 || a === b) return false;
+  return Boolean(((state.war?.[a] ?? ALL_WARS) >> b) & 1);
+}
+
+export function warPending(state, a, b) {
+  if (a < 0 || b < 0 || a === b) return false;
+  return Boolean(((state.pending?.[a] ?? 0) >> b) & 1);
+}
+
+export function canEnter(state, nation, holder) {
+  if (holder === nation || holder === NEUTRAL) return true;
+  return !areAllied(state, nation, holder) && atWar(state, nation, holder);
+}
+
 export function isHostile(state, nation, other) {
-  return other !== nation && !areAllied(state, nation, other);
+  if (other === nation) return false;
+  return other === NEUTRAL || (!areAllied(state, nation, other) && atWar(state, nation, other));
 }
 
 export function factionMembers(state, id) {
@@ -136,6 +155,8 @@ export function createInitialState(map, length = DEFAULT_TURNS, rules = DEFAULT_
     alive: NATIONS.map((n) => (n < map.nationCount ? 1 : 0)),
     faction: NATIONS.map(() => NEUTRAL),
     offers: NATIONS.map(() => NEUTRAL),
+    war: NATIONS.map(() => 0),
+    pending: NATIONS.map(() => 0),
     rules: { winter: rules.winter ? 1 : 0, events: rules.events ? 1 : 0 },
     bonus: NATIONS.map(() => 0),
   };
@@ -144,6 +165,7 @@ export function createInitialState(map, length = DEFAULT_TURNS, rules = DEFAULT_
     for (const key of ["owner", "troops", "forts", "factories", "industry", "faction"]) {
       state[key] = map.start[key].slice();
     }
+    if (map.start.war) state.war = map.start.war.slice();
     if (map.start.armor) state.armor = map.start.armor.map((a, i) => Math.min(a, state.troops[i]));
     if (map.start.guns) {
       state.guns = map.start.guns.map((g, i) => Math.min(g, state.troops[i] - state.armor[i]));
@@ -449,7 +471,7 @@ export function sanitizeOrders(map, state, nation, orders) {
     const from = Math.floor(Number(move.from));
     const to = Math.floor(Number(move.to));
     if (!owns(from) || !provinces[to] || !provinces[to].land) continue;
-    if (areAllied(state, nation, state.owner[to])) continue;
+    if (!canEnter(state, nation, state.owner[to])) continue;
     if (!canReach(map, state, nation, from, to)) continue;
     const freeArmor = armor[from] - (usedArmor[from] || 0);
     const freeGuns = guns[from] - (usedGuns[from] || 0);
@@ -469,6 +491,17 @@ export function sanitizeOrders(map, state, nation, orders) {
   if (offer === NEUTRAL || offer === KEEP_OFFER) clean.offer = offer;
   else if (NATIONS.includes(offer) && offer !== nation && state.alive[offer]) clean.offer = offer;
   clean.breakAlliance = orders.breakAlliance && factionOf(state, nation) >= 0 ? 1 : 0;
+  const declare = Math.floor(Number(orders.declare ?? NEUTRAL));
+  if (
+    NATIONS.includes(declare) &&
+    declare !== nation &&
+    state.alive[declare] &&
+    !areAllied(state, nation, declare) &&
+    !atWar(state, nation, declare) &&
+    !warPending(state, nation, declare)
+  ) {
+    clean.declare = declare;
+  }
 
   const aidTo = Math.floor(Number(orders.aidTo ?? NEUTRAL));
   const aidAmount = Math.min(Math.floor(Number(orders.aidAmount) || 0), budget, MAX_AID);
@@ -713,7 +746,58 @@ function resolveDiplomacy(map, state, next, ordersByNation) {
   }
   next.faction = faction;
   next.offers = offers;
+  resolveWars(state, next, ordersByNation, diplomacy);
   return diplomacy;
+}
+
+function resolveWars(state, next, ordersByNation, diplomacy) {
+  const war = (state.war ?? NATIONS.map(() => ALL_WARS)).slice();
+  const pending = NATIONS.map(() => 0);
+  const link = (list, a, b) => {
+    list[a] |= 1 << b;
+    list[b] |= 1 << a;
+  };
+  for (const a of NATIONS) {
+    for (const b of NATIONS) if (((state.pending?.[a] ?? 0) >> b) & 1) link(war, a, b);
+  }
+  const blocNow = (n) => {
+    const id = next.faction[n];
+    return id >= 0 ? NATIONS.filter((m) => next.alive[m] && next.faction[m] === id) : [n];
+  };
+  for (const nation of NATIONS) {
+    const target = ordersByNation[nation]?.declare ?? NEUTRAL;
+    if (!state.alive[nation] || !next.alive[nation] || target < 0 || !next.alive[target]) continue;
+    if ((war[nation] >> target) & 1 || (pending[nation] >> target) & 1) continue;
+    if (next.faction[nation] >= 0 && next.faction[nation] === next.faction[target]) continue;
+    for (const a of blocNow(nation)) {
+      for (const b of blocNow(target)) if (!((war[a] >> b) & 1)) link(pending, a, b);
+    }
+    diplomacy.push({ kind: "declare", a: nation, b: target, amount: 0 });
+  }
+  for (const id of NATIONS) {
+    const members = NATIONS.filter((n) => next.alive[n] && next.faction[n] === id);
+    if (members.length < 2) continue;
+    const shared = members.reduce((mask, n) => mask | war[n], 0);
+    const queued = members.reduce((mask, n) => mask | pending[n], 0);
+    for (const n of members) {
+      for (const b of NATIONS) {
+        if ((shared >> b) & 1) link(war, n, b);
+        else if ((queued >> b) & 1) link(pending, n, b);
+      }
+    }
+  }
+  for (const a of NATIONS) {
+    for (const b of NATIONS) {
+      const allied = a !== b && next.faction[a] >= 0 && next.faction[a] === next.faction[b];
+      if (a === b || allied || !next.alive[a] || !next.alive[b]) {
+        war[a] &= ~(1 << b);
+        pending[a] &= ~(1 << b);
+      }
+    }
+  }
+  for (const a of NATIONS) pending[a] &= ~war[a];
+  next.war = war;
+  next.pending = pending;
 }
 
 export function resolveTurn(map, state, ordersByNation) {
@@ -836,6 +920,8 @@ export function resolveTurn(map, state, ordersByNation) {
     alive: NATIONS.map(() => 0),
     faction: state.faction.slice(),
     offers: state.offers.slice(),
+    war: (state.war ?? NATIONS.map(() => ALL_WARS)).slice(),
+    pending: (state.pending ?? NATIONS.map(() => 0)).slice(),
     rules: { ...(state.rules ?? DEFAULT_RULES) },
     bonus: (state.bonus ?? NATIONS.map(() => 0)).slice(),
   };

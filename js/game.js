@@ -35,6 +35,8 @@ import {
   gunsOf,
   specialCap,
   areAllied,
+  canEnter,
+  warPending,
   attackStrength,
   buildCostAt,
   canBuild,
@@ -220,12 +222,19 @@ export function selection() {
   );
 }
 
+export function peaceMessage(holder) {
+  const game = store.game;
+  if (areAllied(game.state, game.me, holder)) return "You can't attack your ally";
+  if (warPending(game.state, game.me, holder)) return `War with ${NATION_NAMES[holder]} starts next turn`;
+  return `You're at peace with ${NATION_NAMES[holder]}. Tap their flag in the top bar to DECLARE WAR`;
+}
+
 export function canOrder(from, to) {
   const game = store.game;
   return (
     from !== to &&
     game.state.owner[from] === game.me &&
-    !areAllied(game.state, game.me, game.state.owner[to]) &&
+    canEnter(game.state, game.me, game.state.owner[to]) &&
     store.map.provinces[to]?.land &&
     canReach(store.map, game.state, game.me, from, to)
   );
@@ -343,7 +352,7 @@ export function launchOffensive(ids) {
   if (!canPlan()) return 0;
   const { state, me } = game;
   const hostile = (n) =>
-    map.provinces[n].land && state.owner[n] !== me && !areAllied(state, me, state.owner[n]);
+    map.provinces[n].land && state.owner[n] !== me && canEnter(state, me, state.owner[n]);
   const targets = new Map();
   for (const id of ids) {
     if (availableFrom(id) <= 0) continue;
@@ -409,8 +418,8 @@ export function launchOffensive(ids) {
 
 export function addMove(from, to, share = 1) {
   const game = store.game;
-  if (areAllied(game.state, game.me, game.state.owner[to])) {
-    toast("You can't attack your ally");
+  if (!canEnter(game.state, game.me, game.state.owner[to])) {
+    toast(peaceMessage(game.state.owner[to]));
     return;
   }
   if (!canReach(store.map, game.state, game.me, from, to)) {
@@ -604,6 +613,12 @@ export function applyPanelAction(action, { from, to, id }) {
     case "aid-clear":
       orders.aidTo = -1;
       orders.aidAmount = 0;
+      break;
+    case "declare-war":
+      orders.declare = id;
+      break;
+    case "declare-cancel":
+      orders.declare = -1;
       break;
     case "diplo-offer":
       orders.offer = id;
@@ -977,6 +992,13 @@ function reportDiplomacy(animation) {
         d.a,
       );
       playSound("news");
+    } else if (d.kind === "declare") {
+      postNews(
+        `${a} DECLARES WAR ON ${b}`,
+        "Mobilization has begun. Fighting starts next month, and allies on both sides join in.",
+        d.a,
+      );
+      playSound("defeat");
     } else if (d.kind === "aid" && (ours(d.a) || ours(d.b))) {
       postFeed(`${a} sent ${d.amount} ⚙ of aid to ${b}`, d.a);
     }

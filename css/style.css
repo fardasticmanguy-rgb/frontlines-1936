@@ -1266,3 +1266,31 @@ input {
     margin-left: 0;
   }
 }
+
+.nation.war img {
+  outline: 2px solid #e0563f;
+  outline-offset: 1px;
+}
+
+.nation.pending img {
+  outline: 2px dashed #e0563f;
+  outline-offset: 1px;
+}
+
+.war-tag {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  min-width: 15px;
+  height: 15px;
+  border-radius: 8px;
+  background: #8e2f2a;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+  color: #fff;
+}
+
+.war-tag.soon {
+  background: #6a4a1f;
+}

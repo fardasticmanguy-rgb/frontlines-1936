@@ -24,6 +24,9 @@ import {
   factoryCount,
   income,
   isHostile,
+  areAllied,
+  atWar,
+  warPending,
   specialCap,
   flankBonus,
   gunsOf,
@@ -79,6 +82,42 @@ const STYLE = { aggression: 1, reserve: 1, focus: 1.6, neutral: 1, capital: 1 };
 
 function power(map, state, n) {
   return victoryPoints(map, state, n) * 3 + provinceCount(state, n) + divisionCount(state, n) * 0.25;
+}
+
+const DECLARE_RATIO = { easy: 1.4, normal: 1.15, hard: 1.0 };
+
+function planWar(map, state, nation, level) {
+  if (relativeTurn(state) < 3) return NEUTRAL;
+  const { provinces } = map;
+  const strength = NATIONS.map((n) => (state.alive[n] ? power(map, state, n) : 0));
+  const blocPower = (n) => blocOf(state, n).reduce((sum, m) => sum + strength[m], 0);
+  const ours = blocPower(nation);
+  const enemies = NATIONS.filter(
+    (n) => state.alive[n] && (atWar(state, nation, n) || warPending(state, nation, n)),
+  );
+  const engaged = enemies.reduce((max, n) => Math.max(max, blocPower(n)), 0);
+  if (engaged > ours * 0.6) return NEUTRAL;
+  const borders = new Set();
+  for (const p of provinces) {
+    if (!p.land || state.owner[p.id] !== nation) continue;
+    for (const n of p.neighbors) {
+      const other = state.owner[n];
+      if (other >= 0 && other !== nation) borders.add(other);
+    }
+  }
+  const late = state.turn > state.maxTurns - 6;
+  const threshold = (late ? 0.8 : 1) * (DECLARE_RATIO[level.label.toLowerCase()] ?? 1.15);
+  const candidate = [...borders]
+    .filter(
+      (n) =>
+        state.alive[n] &&
+        !areAllied(state, nation, n) &&
+        !atWar(state, nation, n) &&
+        !warPending(state, nation, n),
+    )
+    .map((n) => ({ n, ratio: ours / Math.max(1, blocPower(n)) }))
+    .sort((a, b) => b.ratio - a.ratio || a.n - b.n)[0];
+  return candidate && candidate.ratio >= threshold ? candidate.n : NEUTRAL;
 }
 
 function planDiplomacy(map, state, nation) {
@@ -214,8 +253,12 @@ function threatMap(map, state, nation, memo = null) {
     const pushes = [];
     for (const n of p.neighbors) {
       const other = state.owner[n];
-      if (!provinces[n].land || other === NEUTRAL || !isHostile(state, nation, other)) continue;
-      pushes.push(attackStrength(state, other, state.troops[n], armor[n], p.terrain, gunsOf(state)[n]));
+      if (!provinces[n].land || other === NEUTRAL || other === nation || areAllied(state, nation, other))
+        continue;
+      const weight = isHostile(state, nation, other) || warPending(state, nation, other) ? 1 : 0.25;
+      pushes.push(
+        weight * attackStrength(state, other, state.troops[n], armor[n], p.terrain, gunsOf(state)[n]),
+      );
     }
     if (!pushes.length) return guard;
     pushes.sort((a, b) => b - a);
@@ -547,6 +590,7 @@ function planWithStyle(map, state, nation, level, style, memo = null) {
   const orders = emptyOrders();
   if (!state.alive[nation]) return orders;
   Object.assign(orders, planDiplomacy(map, state, nation));
+  orders.declare = planWar(map, state, nation, level);
   const context = planningContext(map, state, nation, memo);
   planEconomy(map, state, nation, level, orders, context);
   planMilitary(map, state, nation, level, style, orders, context);
