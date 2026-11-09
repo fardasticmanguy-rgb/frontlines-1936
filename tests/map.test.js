@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { pointInPolygon } from "../js/geometry.js";
 import { generateMap } from "../js/map.js";
 
 test("the same seed always produces the same map", () => {
@@ -73,4 +74,30 @@ test("the Europe 1939 map is one connected continent with real powers", () => {
   assert.ok(!byName("Copenhagen").neighbors.includes(byName("Berlin").id));
   assert.equal(map.capitals.length, 8);
   assert.ok(map.capitals.every((c) => c >= 0));
+});
+
+test("Europe provinces follow 1939 borders with real shapes", () => {
+  const map = generateMap(1, { scenario: "europe" });
+  const byName = (name) => map.provinces.find((p) => p.name === name);
+  const land = map.provinces.filter((p) => p.land);
+  assert.ok(land.length >= 250 && land.length <= 330, `${land.length} provinces`);
+  for (const p of land) {
+    assert.ok(p.polygon.length >= 3, `${p.name} has no shape`);
+    assert.ok(p.rings.length >= 1 && p.rings[0] === p.polygon);
+    assert.ok(p.neighbors.length > 0, `${p.name} has no neighbors`);
+    for (const n of p.neighbors) assert.ok(map.provinces[n].neighbors.includes(p.id));
+    assert.ok(
+      p.rings.some((ring) => pointInPolygon(ring, p.x, p.y)),
+      `${p.name} anchor lies outside its province`,
+    );
+  }
+  assert.ok(map.edges.every((e) => map.provinces[e.a] && map.provinces[e.b]));
+  assert.ok(byName("Danzig").neighbors.includes(byName("Gdynia").id));
+  assert.ok(byName("Königsberg").neighbors.some((n) => map.provinces[n].realm === "Lithuania"));
+  assert.ok(byName("Wilno").neighbors.some((n) => map.provinces[n].realm === "Latvia"));
+  assert.ok(byName("Viipuri").neighbors.includes(byName("Leningrad").id));
+  assert.ok(byName("Ungvár").neighbors.some((n) => map.provinces[n].name === "Stanisławów"));
+  assert.equal(map.start.owner[byName("Vienna").id], 0);
+  assert.equal(map.start.owner[byName("Tirana").id], 4);
+  assert.equal(byName("Chișinău").realm, "Romania");
 });
