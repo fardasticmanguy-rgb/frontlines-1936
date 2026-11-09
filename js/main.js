@@ -42,7 +42,7 @@ import {
   updateClock,
 } from "./ui.js";
 import { renderSetup, setupOption, startSetupGame, toggleSeat } from "./setup.js";
-import { resetZoom, resizeViewport, setRotate, view, viewSettings } from "./view.js";
+import { cycleRotate, resetZoom, resizeViewport, view, viewSettings } from "./view.js";
 
 const ERROR_MESSAGES = {
   not_found: "No game found with that code.",
@@ -270,14 +270,13 @@ function bindMenus() {
     renderPanel();
   });
   on("pause-rotate", () => {
-    setRotate(!viewSettings.rotate);
-    $("pause-rotate").textContent = `ROTATE ON PORTRAIT: ${viewSettings.rotate ? "ON" : "OFF"}`;
+    $("pause-rotate").textContent = `ROTATE ON PORTRAIT: ${cycleRotate().toUpperCase()}`;
   });
   on("fit-button", () => resetZoom(store.game));
   on("menu-button", () => {
     $("pause-note").textContent = isOnline() ? `Game code ${store.net.code}` : "";
     $("pause-sound").textContent = `SOUND: ${isMuted() ? "OFF" : "ON"}`;
-    $("pause-rotate").textContent = `ROTATE ON PORTRAIT: ${viewSettings.rotate ? "ON" : "OFF"}`;
+    $("pause-rotate").textContent = `ROTATE ON PORTRAIT: ${viewSettings.rotate.toUpperCase()}`;
     showScreen("pause");
   });
   on("pause-resume", () => showScreen(null));
