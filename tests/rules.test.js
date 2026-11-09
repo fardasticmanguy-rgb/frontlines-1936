@@ -38,7 +38,8 @@ function blankState() {
   const state = createInitialState(map);
   state.owner.fill(NEUTRAL);
   state.troops.fill(0);
-  state.buildings.fill(BUILDING.NONE);
+  state.forts.fill(0);
+  state.factories.fill(0);
   state.industry = NATIONS.map(() => 50);
   for (const n of NATIONS) {
     state.owner[map.capitals[n]] = n;
@@ -84,7 +85,7 @@ describe("resolveTurn", () => {
 
   test("defenders multiply their strength", () => {
     const state = frontline(1, 9, 3, 4);
-    state.buildings[front] = BUILDING.FORT;
+    state.forts[front] = 1;
     const defense = 4 * defenseMultiplier(map, state, front);
     const { state: next } = resolveTurn(map, state, ordersFor({ 1: move(home, front, 9) }));
     if (9 > defense) {
@@ -149,11 +150,52 @@ describe("resolveTurn", () => {
   });
 
   test("national traits change construction costs", () => {
-    assert.equal(buildCost(1, BUILDING.FACTORY), 7);
-    assert.equal(buildCost(0, BUILDING.FACTORY), 10);
+    assert.equal(buildCost(1, BUILDING.FACTORY), 6);
+    assert.equal(buildCost(0, BUILDING.FACTORY), 8);
+    assert.equal(buildCost(0, BUILDING.FACTORY, 2), 16);
     assert.equal(buildCost(3, BUILDING.FORT), 4);
     assert.equal(fortBonus(3), 0.75);
     assert.equal(buildCost(2, BUILDING.FORT), 6);
+  });
+});
+
+describe("factories", () => {
+  test("factories upgrade level by level and pay out every turn", () => {
+    const state = frontline(0, 4, 3, 1);
+    state.industry[0] = 40;
+    const build = { ...emptyOrders(), builds: { [home]: BUILDING.FACTORY } };
+    const base = income(map, state, 0);
+    let next = resolveTurn(map, state, ordersFor({ 0: sanitizeOrders(map, state, 0, build) })).state;
+    assert.equal(next.factories[home], 1);
+    assert.equal(next.industry[0], 40 - 8 + base + 3);
+    next = resolveTurn(map, next, ordersFor({ 0: sanitizeOrders(map, next, 0, build) })).state;
+    assert.equal(next.factories[home], 2);
+    next.factories[home] = 3;
+    assert.deepEqual(sanitizeOrders(map, next, 0, build).builds, {});
+  });
+
+  test("capturing a factory damages it by one level", () => {
+    const state = frontline(1, 20, 3, 1);
+    state.factories[front] = 0;
+    state.factories[depot] = 2;
+    Object.assign(state.troops, { [depot]: 1 });
+    const otherSide = map.provinces[depot].neighbors.find((n) => n === front);
+    assert.equal(otherSide, front);
+    state.owner[front] = 1;
+    state.troops[front] = 20;
+    const { state: next } = resolveTurn(map, state, ordersFor({ 1: move(front, depot, 20) }));
+    assert.equal(next.owner[depot], 1);
+    assert.equal(next.factories[depot], 1);
+  });
+
+  test("a city can hold a fort and a factory at once", () => {
+    const state = frontline(0, 4, 3, 1);
+    state.industry[0] = 40;
+    state.factories[home] = 1;
+    const clean = sanitizeOrders(map, state, 0, { ...emptyOrders(), builds: { [home]: BUILDING.FORT } });
+    const next = resolveTurn(map, state, ordersFor({ 0: clean })).state;
+    assert.equal(next.forts[home], 1);
+    assert.equal(next.factories[home], 1);
   });
 });
 

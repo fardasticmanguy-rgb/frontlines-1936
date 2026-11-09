@@ -1,5 +1,13 @@
 import { BUILDING, NEUTRAL } from "./config.js";
-import { attackMultiplier, buildCost, defenseMultiplier, emptyOrders, supplyNetwork } from "./rules.js";
+import {
+  attackMultiplier,
+  buildCostAt,
+  canBuild,
+  defenseMultiplier,
+  emptyOrders,
+  factoryCount,
+  supplyNetwork,
+} from "./rules.js";
 
 function encirclementGain(map, state, nation, target) {
   const enemy = state.owner[target];
@@ -55,27 +63,27 @@ export function planAiOrders(map, state, nation) {
   let budget = state.industry[nation];
 
   const cities = mine.filter((id) => provinces[id].city);
-  const factories = mine.filter((id) => state.buildings[id] === BUILDING.FACTORY).length;
-  const factoryTarget = state.turn < 8 ? 2 : 3;
-  const factoryCost = buildCost(nation, BUILDING.FACTORY);
-  const fortCost = buildCost(nation, BUILDING.FORT);
+  const factories = factoryCount(state, nation);
+  const factoryTarget = state.turn < 6 ? 2 : state.turn < 10 ? 4 : 5;
   const attack = attackMultiplier(nation, state.turn);
-  if (!lateGame && factories < factoryTarget && budget >= factoryCost + 4) {
+  if (!lateGame && factories < factoryTarget) {
     const site = cities
-      .filter((id) => state.buildings[id] === BUILDING.NONE)
-      .sort((a, b) => distance[b] - distance[a] || a - b)[0];
-    if (site !== undefined && threat(site) <= state.troops[site]) {
+      .filter((id) => canBuild(map, state, nation, id, BUILDING.FACTORY) && threat(id) <= state.troops[id])
+      .sort((a, b) => distance[b] - distance[a] || state.factories[b] - state.factories[a] || a - b)[0];
+    const cost = site === undefined ? Infinity : buildCostAt(state, nation, site, BUILDING.FACTORY);
+    if (budget >= cost + 4) {
       orders.builds[site] = BUILDING.FACTORY;
-      budget -= factoryCost;
+      budget -= cost;
     }
   }
 
   for (const id of cities) {
-    if (state.buildings[id] !== BUILDING.NONE || orders.builds[id]) continue;
+    if (!canBuild(map, state, nation, id, BUILDING.FORT) || orders.builds[id]) continue;
     const exposed = threat(id) > state.troops[id] * defenseMultiplier(map, state, id);
-    if (exposed && budget >= fortCost + 3) {
+    const cost = buildCostAt(state, nation, id, BUILDING.FORT);
+    if (exposed && budget >= cost + 3) {
       orders.builds[id] = BUILDING.FORT;
-      budget -= fortCost;
+      budget -= cost;
       break;
     }
   }

@@ -31,11 +31,11 @@ const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const HEARTBEAT_SECONDS = 1;
 const SEAT_RECLAIM_MS = 15000;
 const SAVE_LIFETIME_MS = 3 * 3600 * 1000;
-const HOST_SAVE_KEY = "flHost";
+const HOST_SAVE_KEY = "flHost2";
 const NAME_KEY = "flName";
 const NAME_LENGTH = 16;
 const CODE_PATTERN = /^[A-Z0-9]{4}$/;
-const GUEST_SAVE_KEY = "flGuest";
+const GUEST_SAVE_KEY = "flGuest2";
 
 export const playerId = (() => {
   let id = null;
