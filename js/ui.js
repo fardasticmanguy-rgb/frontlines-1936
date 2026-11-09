@@ -7,19 +7,31 @@ import {
   SUPPLY_DEFENSE,
   TERRAIN_NAMES,
   dateOf,
-  isWinter,
 } from "./config.js";
 import { flagImage, flagUrls } from "./flags.js";
-import { applyPanelAction, availableFrom, canPlan, industryLeft, isGuest, isOnline } from "./game.js";
+import {
+  applyPanelAction,
+  availableFrom,
+  canPlan,
+  industryLeft,
+  isGuest,
+  isHotseat,
+  isOnline,
+  localSeats,
+} from "./game.js";
 import {
   FACTORY_OUTPUT,
   KEEP_OFFER,
-  allianceGoal,
-  allyOf,
   areAllied,
   attackStrength,
   blocOf,
   blocPoints,
+  factionCap,
+  factionMembers,
+  factionOf,
+  relativeTurn,
+  warLength,
+  winterActive,
   buildCostAt,
   canBuild,
   defenseMultiplier,
@@ -158,11 +170,23 @@ export function syncZoomButton() {
   if (button.hidden === zoomed) button.hidden = !zoomed;
 }
 
+export function inPlay() {
+  return NATIONS.slice(0, store.map?.nationCount ?? 4);
+}
+
+export function factionName(state, id) {
+  if (id < 0) return "";
+  const members = NATIONS.filter((n) => state.faction[n] === id);
+  const named = store.map?.factionNames?.[id];
+  if (named && members.some((n) => named.core.includes(n))) return named.name;
+  return `${(members.length ? members : [id]).map((n) => NATION_NAMES[n]).join("–")} PACT`;
+}
+
 function pactClass(game, nation) {
   const { state, me } = game;
   if (me < 0 || nation === me || !state.alive[nation]) return "";
   if (areAllied(state, me, nation)) return "allied";
-  if (state.offers[nation] === me && allyOf(state, me) < 0) return "courting";
+  if (state.offers[nation] === me && !areAllied(state, me, nation)) return "courting";
   return "";
 }
 
@@ -194,7 +218,7 @@ export function renderTopBar() {
     const bloc = blocOf(state, me);
     $("stat-victory").innerHTML =
       bloc.length > 1
-        ? `★ ${blocPoints(map, state, bloc)}/${allianceGoal(map)}<small>ALLIANCE VP</small>`
+        ? `★ ${blocPoints(map, state, bloc)}/${victoryGoal(map, bloc.length)}<small>FACTION VP</small>`
         : `★ ${victoryPoints(map, state, me)}/${victoryGoal(map)}<small>VICTORY PTS</small>`;
   } else {
     flag.hidden = true;
@@ -203,22 +227,26 @@ export function renderTopBar() {
   }
 
   const shownTurn = Math.min(state.turn, state.maxTurns);
-  const winter = isWinter(shownTurn);
+  const winter = winterActive({ ...state, turn: shownTurn });
   $("date").textContent = `${winter ? "❄ " : ""}${dateOf(shownTurn)}`;
   $("date").classList.toggle("winter", winter);
-  $("nations").innerHTML = NATIONS.map(
-    (n) => `
+  $("nations").classList.toggle("crowded", inPlay().length > 5);
+  $("nations").innerHTML = inPlay()
+    .map(
+      (n) => `
       <div class="nation ${me === n ? "me" : ""} ${state.alive[n] ? "" : "dead"} ${game.selectedNation === n ? "picked" : ""} ${pactClass(game, n)}" data-nation="${n}">
         <img src="${flagUrls[n]}" alt="">${nationBadge(game, n)}
         <span>★${victoryPoints(map, state, n)}</span>
       </div>`,
-  ).join("");
+    )
+    .join("");
 
   const button = $("end-turn");
   button.hidden =
     Boolean(game.animation) || me < 0 || !state.alive[me] || state.winner >= 0 || game.phase !== "plan";
   const waiting = isOnline() && game.ready[me];
-  button.textContent = waiting ? "READY ✓" : isOnline() ? "READY" : "END TURN";
+  const handing = isHotseat(game) && localSeats(game).some((n) => n !== me && !game.planned[n]);
+  button.textContent = waiting ? "READY ✓" : isOnline() ? "READY" : handing ? "DONE ➜" : "END TURN";
   button.classList.toggle("waiting", Boolean(waiting));
   updateClock();
 }
@@ -227,7 +255,7 @@ export function updateClock() {
   const game = store.game;
   if (!game || game.mode === "demo") return;
   const { state } = game;
-  let text = `TURN ${Math.min(state.turn, state.maxTurns)} / ${state.maxTurns}`;
+  let text = `TURN ${Math.min(relativeTurn(state), warLength(state))} / ${warLength(state)}`;
   let urgent = false;
 
   if (game.phase === "plan" && !game.animation && game.deadline) {
@@ -252,11 +280,11 @@ function idleMessage(game) {
   if (game.animation) return "Orders are being carried out…";
   if (game.ready[me])
     return "Orders locked in. Waiting for the other nations… Tap READY again to change your plan.";
-  if (state.turn <= 2) {
+  if (relativeTurn(state) <= 2) {
     const button = isOnline() ? "READY" : "END TURN";
     return `<b class="gold">Drag</b> from your land onto a neighbor to attack. Tap a <b class="gold">city</b> to train divisions or build. When your plan is set, hit <b class="green">${button}</b>.`;
   }
-  if (isWinter(state.turn))
+  if (winterActive(state))
     return "❄ Winter: attacks are 20% weaker. A good month to dig in, train and build.";
   return "Drag from your land onto a neighbor to attack or move. Cut enemy provinces off from their cities to starve them.";
 }
@@ -267,7 +295,7 @@ function traitLine(nation) {
 }
 
 function reportLine(game) {
-  const report = game.report;
+  const report = game.reports?.[game.me] ?? game.report;
   if (!report || game.animation || game.state.winner >= 0 || !game.state.alive[game.me]) return "";
   const chips = [];
   if (report.gained) chips.push(`<span class="good">+${report.gained} taken</span>`);
@@ -327,7 +355,7 @@ function provinceInfo(map, state, id) {
       <div class="info-head">${flagImage(owner)}
         <div>
           <div class="info-title">${p.name}</div>
-          <div class="info-sub">${owner >= 0 ? NATION_NAMES[owner] : "Unclaimed territory"}</div>
+          <div class="info-sub">${owner >= 0 ? NATION_NAMES[owner] : p.realm ? `Neutral ${p.realm}` : "Unclaimed territory"}</div>
         </div>
       </div>
       <div class="meta">${TERRAIN_NAMES[p.terrain]}${building}${city}</div>
@@ -352,7 +380,7 @@ function orderRows(game, map, id) {
   for (const m of outgoing) {
     const friendly = state.owner[m.to] === me;
     const defense = defenseStrength(map, state, m.to);
-    const strength = attackStrength(me, m.count, state.turn);
+    const strength = attackStrength(state, me, m.count);
     const winning = friendly || strength > defense;
     const verdict = friendly
       ? "reinforce"
@@ -396,69 +424,108 @@ function orderRows(game, map, id) {
   return `<div class="actions">${rows.join("")}</div>`;
 }
 
-function relationOf(game, nation) {
+function relationOf(game, map, nation) {
   const { state, me } = game;
-  const ally = allyOf(state, nation);
   const plan = me >= 0 ? game.orders[me] : null;
-  const allyName = ally >= 0 ? NATION_NAMES[ally] : "";
+  const theirs = factionOf(state, nation);
+  const mine = factionOf(state, me);
+  const theirName = factionName(state, theirs);
+  const myName = factionName(state, mine);
+  const full = (id) => id >= 0 && factionMembers(state, id).length >= factionCap(map);
   if (!state.alive[nation]) return { text: "Defeated" };
-  if (nation === me) return { text: ally >= 0 ? `Your nation · allied with ${allyName}` : "Your nation" };
-  if (me < 0 || !state.alive[me])
-    return { text: ally >= 0 ? `Allied with ${allyName}` : "At war with everyone" };
+  if (nation === me || me < 0 || !state.alive[me]) {
+    const text = theirs >= 0 ? `Member of the <b class="gold">${theirName}</b>` : "No allies";
+    if (nation !== me || mine < 0) return { text };
+    return plan?.breakAlliance
+      ? { text: `${text} · <span class="bad">leaving this turn</span>`, action: "diplo-keep", label: "STAY" }
+      : { text, action: "diplo-break", label: `LEAVE THE ${myName}`, danger: true };
+  }
   if (areAllied(state, me, nation)) {
     return plan?.breakAlliance
       ? {
-          text: '🤝 Allied · <span class="bad">you will break the pact this turn</span>',
+          text: `🤝 Fellow member of the ${myName} · <span class="bad">you are leaving this turn</span>`,
           action: "diplo-keep",
-          label: "KEEP ALLIANCE",
+          label: "STAY IN THE FACTION",
         }
       : {
-          text: '🤝 <span class="good">Allied</span> · they can\'t attack you',
+          text: `🤝 <span class="good">Fellow member of the ${myName}</span> · you can't attack each other`,
           action: "diplo-break",
-          label: "BREAK ALLIANCE",
+          label: `LEAVE THE ${myName}`,
           danger: true,
         };
   }
-  if (ally >= 0) return { text: `<span class="bad">At war</span> · allied with ${allyName}` };
-  if (allyOf(state, me) >= 0) return { text: '<span class="bad">At war</span> · you already have an ally' };
+  const atWar = '<span class="bad">At war</span>';
+  if (mine >= 0 && theirs >= 0) return { text: `${atWar} · member of the ${theirName}` };
   const standing = plan && plan.offer !== KEEP_OFFER ? plan.offer : state.offers[me];
   if (standing === nation) {
-    return {
-      text: "✉ Your alliance offer is on the table",
-      action: "diplo-withdraw",
-      label: "WITHDRAW OFFER",
-    };
+    return { text: "✉ Your offer is on the table", action: "diplo-withdraw", label: "WITHDRAW OFFER" };
+  }
+  if (full(theirs) || full(mine)) {
+    return { text: `${atWar}${theirs >= 0 ? ` · member of the ${theirName}` : ""} · that faction is full` };
   }
   if (state.offers[nation] === me) {
-    return {
-      text: '✉ <span class="good">They propose an alliance!</span>',
-      action: "diplo-offer",
-      label: "ACCEPT ALLIANCE",
-    };
+    const label =
+      theirs >= 0 ? `JOIN THE ${theirName}` : mine >= 0 ? `ACCEPT INTO THE ${myName}` : "ACCEPT ALLIANCE";
+    return { text: '✉ <span class="good">They want an alliance!</span>', action: "diplo-offer", label };
   }
-  return { text: '<span class="bad">At war</span>', action: "diplo-offer", label: "OFFER ALLIANCE" };
+  const label =
+    theirs >= 0 ? `ASK TO JOIN THE ${theirName}` : mine >= 0 ? `INVITE TO THE ${myName}` : "OFFER ALLIANCE";
+  const text = theirs >= 0 ? `${atWar} · member of the ${theirName}` : atWar;
+  return { text, action: "diplo-offer", label };
+}
+
+function aidRow(game, nation) {
+  const { me } = game;
+  if (!canPlan() || nation === me || me < 0 || !game.state.alive[nation]) return "";
+  const plan = game.orders[me];
+  const amount = plan.aidTo === nation ? plan.aidAmount : 0;
+  return `
+    <div class="row">
+      <span class="label">Send aid</span>
+      <button data-action="aid-less" data-id="${nation}">−</button><b>⚙ ${amount}</b>
+      <button data-action="aid1" data-id="${nation}">+1</button>
+      <button data-action="aid5" data-id="${nation}">+5</button>
+      ${amount ? `<button data-action="aid-clear" data-id="${nation}">✕</button>` : ""}
+      <span class="muted">arrives as industry next turn</span>
+    </div>`;
 }
 
 function diplomacyPanel(game, map, nation) {
   const { state } = game;
-  const relation = relationOf(game, nation);
+  const relation = relationOf(game, map, nation);
   const trait = NATION_TRAITS[nation];
+  const goals = `★ ${victoryGoal(map)} to win alone, ${victoryGoal(map, 2)} for two allies, ${victoryGoal(map, 3)} for three`;
   const button =
     relation.action && canPlan()
-      ? `<div class="actions"><div class="row"><button class="${relation.danger ? "danger" : "go"}" data-action="${relation.action}" data-id="${nation}">${relation.label}</button></div>
-         <div class="row muted">Alliances form once both nations have offered. Allies share supply lines, fight together and win together (★ ${allianceGoal(map)} needed instead of ${victoryGoal(map)}).</div></div>`
+      ? `<div class="row"><button class="${relation.danger ? "danger" : "go"}" data-action="${relation.action}" data-id="${nation}">${relation.label}</button></div>
+         <div class="row muted">Pacts form once both sides have offered. Factions share supply, fight together and win together (${goals}).</div>`
       : "";
+  const actions =
+    button || aidRow(game, nation) ? `<div class="actions">${button}${aidRow(game, nation)}</div>` : "";
   return `
     <div class="info">
       <div class="info-head">${flagImage(nation)}
         <div>
           <div class="info-title">${NATION_NAMES[nation]}</div>
-          <div class="info-sub">★ ${victoryPoints(map, state, nation)} · ${provinceCount(state, nation)} provinces · ${divisionCount(state, nation)} divisions · 🏭 ${factoryCount(state, nation)}</div>
+          <div class="info-sub">★ ${victoryPoints(map, state, nation)} · ${provinceCount(state, nation)} provinces · ${divisionCount(state, nation)} divisions · 🏭 ${factoryCount(state, nation)} · ⚙ ${state.industry[nation]}</div>
         </div>
       </div>
       <div class="trait"><b>${trait.name}</b> · ${trait.text}</div>
       <div class="meta">${relation.text}</div>
-    </div>${button}`;
+    </div>${actions}`;
+}
+
+export function showHandoff(nation) {
+  const { game, map } = store;
+  $("handoff-flag").src = flagUrls[nation];
+  $("handoff-name").textContent = NATION_NAMES[nation];
+  const seat = localSeats(game).indexOf(nation) + 1;
+  $("handoff-kicker").textContent = `PLAYER ${seat} · ${dateOf(game.state.turn)}`;
+  const report = game.reports?.[nation];
+  $("handoff-note").textContent = report
+    ? `Last month: ${report.gained} taken, ${report.lost} lost. ★ ${victoryPoints(map, game.state, nation)}`
+    : "Pass the device. No peeking at the other plans!";
+  showScreen("handoff");
 }
 
 export function renderPanel() {
@@ -509,13 +576,21 @@ export function renderGameOver() {
   const winner = state.winner;
   const featured = winner >= 0 ? winner : me;
   const winners = NATIONS.includes(winner) ? blocOf(state, winner) : [];
-  const won = winners.includes(me);
+  const humans = game.mode === "online" ? [me] : NATIONS.filter((n) => game.seats[n].type === "local");
+  const won = winners.some((n) => humans.includes(n));
+  const hotseat = humans.length > 1;
 
-  $("over-kicker").textContent = won ? "VICTORY" : me >= 0 ? "DEFEAT" : "THE WAR IS OVER";
+  $("over-kicker").textContent = hotseat
+    ? "THE WAR IS OVER"
+    : won
+      ? "VICTORY"
+      : me >= 0
+        ? "DEFEAT"
+        : "THE WAR IS OVER";
   $("over-title").textContent =
     winner < 0
       ? `${NATION_NAMES[me]} HAS FALLEN`
-      : winner < 4
+      : winner < NATIONS.length
         ? winners.length > 1
           ? `${winners.map((n) => NATION_NAMES[n]).join(" & ")} WIN`
           : `${NATION_NAMES[winner]} WINS`
@@ -523,7 +598,7 @@ export function renderGameOver() {
   $("over-flag").hidden = !NATIONS.includes(featured);
   if (NATIONS.includes(featured)) $("over-flag").src = flagUrls[featured];
 
-  const ranking = NATIONS.slice().sort(
+  const ranking = inPlay().sort(
     (a, b) =>
       winners.includes(b) - winners.includes(a) ||
       victoryPoints(map, state, b) - victoryPoints(map, state, a) ||

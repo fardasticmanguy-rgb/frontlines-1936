@@ -7,13 +7,12 @@ import {
   NATIONS,
   TAU,
   clamp,
-  isWinter,
 } from "./config.js";
 import { flagCanvases } from "./flags.js";
 import { canPlan } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
 import { createRng } from "./random.js";
-import { areAllied, attackStrength, defenseStrength, supplyNetwork } from "./rules.js";
+import { areAllied, attackStrength, defenseStrength, supplyNetwork, winterActive } from "./rules.js";
 import { store } from "./store.js";
 import { mapMatrix, updateLayout, view } from "./view.js";
 
@@ -284,6 +283,22 @@ function buildLayers() {
   r.strokeStyle = "rgba(30, 32, 26, 0.9)";
   r.lineWidth = 1.6;
   strokeEdges(r, map, (e) => provinces[e.a].land !== provinces[e.b].land);
+  r.setLineDash([5, 4]);
+  r.lineCap = "round";
+  for (const [a, b] of map.links ?? []) {
+    const pa = provinces[a];
+    const pb = provinces[b];
+    r.strokeStyle = "rgba(20, 30, 36, 0.55)";
+    r.lineWidth = 3.4;
+    r.beginPath();
+    r.moveTo(pa.x, pa.y);
+    r.lineTo(pb.x, pb.y);
+    r.stroke();
+    r.strokeStyle = "rgba(220, 236, 240, 0.85)";
+    r.lineWidth = 1.6;
+    r.stroke();
+  }
+  r.setLineDash([]);
 }
 
 export function addRing(x, y, radius, color, life) {
@@ -863,8 +878,7 @@ function drawOrders(game, map, state) {
   const orders = game.orders[game.me];
   for (const m of orders.moves) {
     const friendly = state.owner[m.to] === game.me;
-    const winning =
-      friendly || attackStrength(game.me, m.count, state.turn) > defenseStrength(map, state, m.to);
+    const winning = friendly || attackStrength(state, game.me, m.count) > defenseStrength(map, state, m.to);
     drawArrow(map, m.from, m.to, friendly ? MOVE_COLOR : ATTACK_COLOR, 0.92, m.count, winning);
   }
   for (const id in orders.recruits) {
@@ -1041,7 +1055,7 @@ export function render(dt) {
   ctx.drawImage(baseLayer, 0, 0);
   ctx.setTransform(...mapTransform);
   drawPolitical(map, state, paths, dt);
-  drawWinter(paths, dt, isWinter(state.turn));
+  drawWinter(paths, dt, winterActive(state));
   drawSupply(map, state, paths);
 
   ctx.globalAlpha = 0.62;
