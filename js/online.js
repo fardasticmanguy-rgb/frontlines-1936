@@ -1,5 +1,5 @@
 import { planAiOrders } from "./ai.js";
-import { NATIONS, NATION_NAMES } from "./config.js";
+import { NATIONS, NATION_NAMES, NATION_TRAITS } from "./config.js";
 import { decodeOrders, decodeState, encodeOrders, encodeState } from "./codec.js";
 import { flagImage } from "./flags.js";
 import {
@@ -348,7 +348,7 @@ export function renderLobby() {
       const role = id === "ai" ? "AI COMMANDER" : n === 0 ? "HOST" : "PLAYER";
       const you = id === playerId ? " · YOU" : "";
       const title = id === "ai" ? NATION_NAMES[n] : `${NATION_NAMES[n]} · ${cleanName(names[n]) || "Player"}`;
-      return seatRow(n, title, role + you);
+      return seatRow(n, title, `${NATION_TRAITS[n].name} · ${role}${you}`);
     }),
   );
 

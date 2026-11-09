@@ -1,9 +1,9 @@
-import { BUILDING, NATION_COLORS, TAU, clamp } from "./config.js";
+import { BUILDING, NATION_COLORS, NATION_NAMES, NATIONS, TAU, clamp, isWinter } from "./config.js";
 import { flagCanvases } from "./flags.js";
 import { canPlan } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
 import { createRng } from "./random.js";
-import { defenseStrength } from "./rules.js";
+import { attackStrength, defenseStrength, supplyNetwork } from "./rules.js";
 import { store } from "./store.js";
 import { mapMatrix, updateLayout, view } from "./view.js";
 
@@ -23,6 +23,14 @@ let reliefLayer = null;
 
 const effects = [];
 const flashes = new Map();
+const sweeps = new Map();
+const floaters = [];
+const snowflakes = [];
+const labelCache = new WeakMap();
+const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+const hatch = createHatch();
+let shake = 0;
+let winterAmount = 0;
 
 function createCanvas(width, height) {
   const c = document.createElement("canvas");
@@ -44,6 +52,30 @@ function createGrain() {
   return c;
 }
 
+function createHatch() {
+  const c = createCanvas(12, 12);
+  const g = c.getContext("2d");
+  g.strokeStyle = "rgba(30, 10, 6, 0.55)";
+  g.lineWidth = 2.2;
+  g.beginPath();
+  for (const offset of [-12, 0, 12]) {
+    g.moveTo(offset, 12);
+    g.lineTo(offset + 12, 0);
+  }
+  g.stroke();
+  return c;
+}
+
+function polygonArea(polygon) {
+  let area = 0;
+  for (let k = 0; k < polygon.length; k++) {
+    const p = polygon[k];
+    const q = polygon[(k + 1) % polygon.length];
+    area += p[0] * q[1] - q[0] * p[1];
+  }
+  return Math.abs(area) / 2;
+}
+
 function pathsFor(map) {
   let paths = pathCache.get(map);
   if (paths) return paths;
@@ -55,7 +87,7 @@ function pathsFor(map) {
     if (p.land) land.addPath(path);
     return path;
   });
-  paths = { land, provinces };
+  paths = { land, provinces, areas: map.provinces.map((p) => polygonArea(p.polygon)) };
   pathCache.set(map, paths);
   return paths;
 }
@@ -283,13 +315,32 @@ export function addSmoke(x, y) {
   }
 }
 
+export function addBlast(x, y, size, delay) {
+  effects.push({ kind: "blast", x, y, size, delay, life: 0.5, maxLife: 0.5 });
+}
+
+export function addFloater(x, y, text, color, delay = 0) {
+  floaters.push({ x, y, text, color, delay, life: 1.8 });
+}
+
+export function addShake(amount) {
+  if (!reducedMotion) shake = Math.min(12, shake + amount);
+}
+
 export function flashProvince(id) {
   flashes.set(id, 1);
 }
 
+export function sweepProvince(id, from, x, y) {
+  sweeps.set(id, { from, x, y, t: 0 });
+}
+
 export function clearEffects() {
   effects.length = 0;
+  floaters.length = 0;
   flashes.clear();
+  sweeps.clear();
+  shake = 0;
 }
 
 export function arrowCurve(map, from, to) {
@@ -517,15 +568,189 @@ function visibleState(game) {
   return game.animation && !game.animation.applied ? game.animation.before : game.state;
 }
 
-function drawPolitical(map, state, paths) {
+function fillOwner(owner, path) {
+  ctx.globalAlpha = owner >= 0 ? 0.8 : 0.16;
+  ctx.fillStyle = owner >= 0 ? NATION_COLORS[owner] : "#6d6550";
+  ctx.fill(path);
+}
+
+function drawSweep(p, owner, path, sweep, dt) {
+  sweep.t += dt;
+  const progress = clamp(sweep.t / 0.75, 0, 1);
+  const eased = 1 - (1 - progress) ** 3;
+  let reach = 0;
+  for (const [x, y] of p.polygon) reach = Math.max(reach, Math.hypot(x - sweep.x, y - sweep.y));
+  const radius = Math.max(0.1, eased * reach);
+  fillOwner(sweep.from, path);
+  ctx.save();
+  ctx.clip(path);
+  ctx.beginPath();
+  ctx.arc(sweep.x, sweep.y, radius, 0, TAU);
+  ctx.save();
+  ctx.clip();
+  fillOwner(owner, path);
+  ctx.restore();
+  ctx.globalAlpha = 0.85 * (1 - progress);
+  ctx.strokeStyle = "#fff3c4";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+  if (progress >= 1) sweeps.delete(p.id);
+}
+
+function drawPolitical(map, state, paths, dt) {
   for (const p of map.provinces) {
     if (!p.land) continue;
     const owner = state.owner[p.id];
-    ctx.globalAlpha = owner >= 0 ? 0.8 : 0.16;
-    ctx.fillStyle = owner >= 0 ? NATION_COLORS[owner] : "#6d6550";
-    ctx.fill(paths.provinces[p.id]);
+    const sweep = sweeps.get(p.id);
+    if (sweep) drawSweep(p, owner, paths.provinces[p.id], sweep, dt);
+    else fillOwner(owner, paths.provinces[p.id]);
   }
   ctx.globalAlpha = 1;
+}
+
+function drawSupply(map, state, paths) {
+  const supplied = supplyNetwork(map, state);
+  const pattern = ctx.createPattern(hatch, "repeat");
+  ctx.fillStyle = pattern;
+  for (const p of map.provinces) {
+    if (!p.land || supplied[p.id] || state.owner[p.id] < 0) continue;
+    ctx.fill(paths.provinces[p.id]);
+  }
+}
+
+function drawWinter(paths, dt, winter) {
+  winterAmount += ((winter ? 1 : 0) - winterAmount) * Math.min(1, dt * 1.5);
+  if (winterAmount < 0.01) return;
+  ctx.globalAlpha = 0.3 * winterAmount;
+  ctx.fillStyle = "#eef4fa";
+  ctx.fill(paths.land);
+  ctx.globalAlpha = 1;
+}
+
+function drawSnowfall(dt) {
+  if (winterAmount < 0.01 || reducedMotion) return;
+  const wanted = Math.round(110 * winterAmount);
+  while (snowflakes.length < wanted) {
+    snowflakes.push({
+      x: Math.random() * view.width,
+      y: Math.random() * view.height,
+      r: 0.8 + Math.random() * 1.8,
+      speed: 18 + Math.random() * 30,
+      sway: Math.random() * TAU,
+    });
+  }
+  snowflakes.length = Math.min(snowflakes.length, wanted);
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  ctx.fillStyle = "#ffffff";
+  for (const f of snowflakes) {
+    f.y += f.speed * dt;
+    f.sway += dt * 1.3;
+    f.x += Math.sin(f.sway) * 12 * dt;
+    if (f.y > view.height + 4) {
+      f.y = -4;
+      f.x = Math.random() * view.width;
+    }
+    ctx.globalAlpha = 0.55 * winterAmount;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, f.r, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function nationLabels(map, state, paths) {
+  const cached = labelCache.get(state.owner);
+  if (cached && cached.rotated === view.rotated) return cached.labels;
+  const { provinces } = map;
+  const labels = [];
+  const turn = view.rotated ? Math.PI / 2 : 0;
+
+  for (const nation of NATIONS) {
+    const seen = new Set();
+    let best = [];
+    for (const p of provinces) {
+      if (!p.land || state.owner[p.id] !== nation || seen.has(p.id)) continue;
+      const group = [p.id];
+      seen.add(p.id);
+      for (let head = 0; head < group.length; head++) {
+        for (const n of provinces[group[head]].neighbors) {
+          if (!seen.has(n) && state.owner[n] === nation) {
+            seen.add(n);
+            group.push(n);
+          }
+        }
+      }
+      if (group.length > best.length) best = group;
+    }
+    if (best.length < 3) continue;
+
+    let weight = 0;
+    let mx = 0;
+    let my = 0;
+    for (const id of best) {
+      const w = paths.areas[id];
+      weight += w;
+      mx += provinces[id].x * w;
+      my += provinces[id].y * w;
+    }
+    mx /= weight;
+    my /= weight;
+    let sxx = 0;
+    let syy = 0;
+    let sxy = 0;
+    for (const id of best) {
+      const w = paths.areas[id];
+      const dx = provinces[id].x - mx;
+      const dy = provinces[id].y - my;
+      sxx += dx * dx * w;
+      syy += dy * dy * w;
+      sxy += dx * dy * w;
+    }
+    let screen = 0.5 * Math.atan2(2 * sxy, sxx - syy) + turn;
+    while (screen > Math.PI / 2) screen -= Math.PI;
+    while (screen < -Math.PI / 2) screen += Math.PI;
+    screen = clamp(screen, -0.45, 0.45);
+    const angle = screen - turn;
+    const ux = Math.cos(angle);
+    const uy = Math.sin(angle);
+
+    let along = 0;
+    let across = 0;
+    for (const id of best) {
+      for (const [x, y] of provinces[id].polygon) {
+        along = Math.max(along, Math.abs((x - mx) * ux + (y - my) * uy));
+        across = Math.max(across, Math.abs(-(x - mx) * uy + (y - my) * ux));
+      }
+    }
+    labels.push({ nation, x: mx, y: my, angle, length: along * 1.5, thickness: across });
+  }
+  labelCache.set(state.owner, { rotated: view.rotated, labels });
+  return labels;
+}
+
+function drawNationLabels(map, state, paths) {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const spaced = "letterSpacing" in ctx;
+  for (const label of nationLabels(map, state, paths)) {
+    const name = spaced ? NATION_NAMES[label.nation] : NATION_NAMES[label.nation].split("").join(" ");
+    ctx.font = `700 100px ${FONT}`;
+    if (spaced) ctx.letterSpacing = "18px";
+    const width = ctx.measureText(name).width || 1;
+    const size = clamp(Math.min((label.length / width) * 100, label.thickness * 0.5), 10, 44);
+    ctx.font = `700 ${size}px ${FONT}`;
+    if (spaced) ctx.letterSpacing = `${size * 0.18}px`;
+    ctx.save();
+    ctx.translate(label.x, label.y);
+    ctx.rotate(label.angle);
+    ctx.fillStyle = "rgba(24, 18, 10, 0.34)";
+    ctx.fillText(name, 0, 0);
+    ctx.restore();
+  }
+  if (spaced) ctx.letterSpacing = "0px";
+  ctx.restore();
 }
 
 function drawFlashes(paths, dt) {
@@ -610,7 +835,8 @@ function drawOrders(game, map, state) {
   const orders = game.orders[game.me];
   for (const m of orders.moves) {
     const friendly = state.owner[m.to] === game.me;
-    const winning = friendly || m.count > defenseStrength(map, state, m.to);
+    const winning =
+      friendly || attackStrength(game.me, m.count, state.turn) > defenseStrength(map, state, m.to);
     drawArrow(map, m.from, m.to, friendly ? MOVE_COLOR : ATTACK_COLOR, 0.92, m.count, winning);
   }
   for (const id in orders.recruits) {
@@ -685,11 +911,52 @@ function drawAnimation(game, map, state) {
   }
 }
 
+function drawBlast(f) {
+  const progress = 1 - Math.max(0, f.life / f.maxLife);
+  const radius = f.size * (0.35 + 0.65 * Math.sqrt(progress));
+  const gradient = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, radius);
+  gradient.addColorStop(0, "rgba(255, 250, 220, 1)");
+  gradient.addColorStop(0.35, "rgba(255, 196, 90, 0.9)");
+  gradient.addColorStop(0.7, "rgba(214, 84, 32, 0.45)");
+  gradient.addColorStop(1, "rgba(120, 40, 20, 0)");
+  ctx.globalAlpha = 1 - progress;
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(f.x, f.y, radius, 0, TAU);
+  ctx.fill();
+}
+
+function drawFloaters(dt) {
+  for (const f of floaters) {
+    if (f.delay > 0) {
+      f.delay -= dt;
+      continue;
+    }
+    f.life -= dt;
+    const age = 1.8 - f.life;
+    const rise = 22 * (1 - Math.exp(-age * 2.2));
+    const pop = Math.min(1, age * 6);
+    upright(ctx, f.x, f.y);
+    ctx.globalAlpha = clamp(f.life * 1.5, 0, 1);
+    ctx.scale(0.6 + 0.4 * pop, 0.6 + 0.4 * pop);
+    drawText(f.text, 0, -rise, `700 13px ${FONT}`, f.color);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].life <= 0) floaters.splice(i, 1);
+}
+
 function drawEffects(dt) {
   for (const f of effects) {
+    if (f.delay > 0) {
+      f.delay -= dt;
+      continue;
+    }
     f.life -= dt;
     const fade = Math.max(0, f.life / f.maxLife);
-    if (f.kind === "ring") {
+    if (f.kind === "blast") {
+      drawBlast(f);
+    } else if (f.kind === "ring") {
       f.r += (f.radius - f.r) * Math.min(1, dt * 6);
       ctx.globalAlpha = fade;
       ctx.strokeStyle = f.color;
@@ -731,16 +998,23 @@ export function render(dt) {
 
   const paths = pathsFor(map);
   const state = visibleState(game);
+  shake *= Math.exp(-dt * 7);
+  const shakeX = shake > 0.2 ? (Math.random() - 0.5) * shake : 0;
+  const shakeY = shake > 0.2 ? (Math.random() - 0.5) * shake : 0;
+  const originX = view.originX + shakeX;
+  const originY = view.originY + shakeY;
   const layerZoom = view.scale / view.layerScale;
-  const layerX = (view.originX + view.bounds.x0 * view.scale) * view.dpr;
-  const layerY = (view.originY + view.bounds.y0 * view.scale) * view.dpr;
-  const mapTransform = mapMatrix(view.scale * view.dpr, view.originX * view.dpr, view.originY * view.dpr);
+  const layerX = (originX + view.bounds.x0 * view.scale) * view.dpr;
+  const layerY = (originY + view.bounds.y0 * view.scale) * view.dpr;
+  const mapTransform = mapMatrix(view.scale * view.dpr, originX * view.dpr, originY * view.dpr);
 
   ctx.setTransform(layerZoom, 0, 0, layerZoom, layerX, layerY);
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(baseLayer, 0, 0);
   ctx.setTransform(...mapTransform);
-  drawPolitical(map, state, paths);
+  drawPolitical(map, state, paths, dt);
+  drawWinter(paths, dt, isWinter(state.turn));
+  drawSupply(map, state, paths);
 
   ctx.globalAlpha = 0.62;
   ctx.setTransform(layerZoom, 0, 0, layerZoom, layerX, layerY);
@@ -748,6 +1022,7 @@ export function render(dt) {
   ctx.globalAlpha = 1;
   ctx.setTransform(...mapTransform);
 
+  drawNationLabels(map, state, paths);
   drawFlashes(paths, dt);
   drawBorders(map, state, game.me);
   drawSelection(game, map, state, paths);
@@ -756,4 +1031,6 @@ export function render(dt) {
   drawDragLine(game, map);
   drawAnimation(game, map, state);
   drawEffects(dt);
+  drawFloaters(dt);
+  drawSnowfall(dt);
 }

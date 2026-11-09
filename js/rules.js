@@ -7,7 +7,11 @@ import {
   NATIONS,
   NEUTRAL,
   STARTING_INDUSTRY,
+  SUPPLY_DEFENSE,
   TERRAIN_DEFENSE,
+  WINTER_ATTACK,
+  hasTrait,
+  isWinter,
 } from "./config.js";
 import { createRng } from "./random.js";
 
@@ -15,6 +19,14 @@ const CAPITAL_GARRISON = 8;
 const BORDERLAND_GARRISON = 3;
 const VICTORY_SHARE = 0.6;
 const MAX_RECRUITS = 99;
+const BLITZ_ATTACK = 1.1;
+const FORTRESS_FORT_BONUS = 0.75;
+const FORTRESS_CITY_BONUS = 0.5;
+const EVENT_CHANCE = 0.5;
+
+export const WORLD_EVENTS = ["volunteers", "boom", "strikes", "partisans", "harvest"];
+
+const supplyCache = new WeakMap();
 
 export function emptyOrders() {
   return { moves: [], recruits: {}, builds: {} };
@@ -54,13 +66,66 @@ export function createInitialState(map, maxTurns = DEFAULT_TURNS) {
   return state;
 }
 
+export function buildCost(nation, kind) {
+  if (kind === BUILDING.FACTORY && hasTrait(nation, "industry")) return 7;
+  if (kind === BUILDING.FORT && hasTrait(nation, "fortress")) return 4;
+  return BUILD_COST[kind];
+}
+
+export function fortBonus(nation) {
+  return hasTrait(nation, "fortress") ? FORTRESS_FORT_BONUS : FORT_BONUS;
+}
+
+export function attackMultiplier(nation, turn) {
+  return (hasTrait(nation, "blitz") ? BLITZ_ATTACK : 1) * (isWinter(turn) ? WINTER_ATTACK : 1);
+}
+
+export function attackStrength(nation, count, turn) {
+  return count * attackMultiplier(nation, turn);
+}
+
+export function supplyNetwork(map, state) {
+  const owner = state.owner;
+  const key = owner.join(",");
+  const cached = supplyCache.get(owner);
+  if (cached && cached.key === key) return cached.supplied;
+
+  const { provinces } = map;
+  const supplied = new Uint8Array(provinces.length);
+  const queue = [];
+  for (const p of provinces) {
+    if (owner[p.id] === NEUTRAL || !p.land) supplied[p.id] = 1;
+    else if (p.city) {
+      supplied[p.id] = 1;
+      queue.push(p.id);
+    }
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const id = queue[head];
+    for (const n of provinces[id].neighbors) {
+      if (!supplied[n] && owner[n] === owner[id]) {
+        supplied[n] = 1;
+        queue.push(n);
+      }
+    }
+  }
+  supplyCache.set(owner, { key, supplied });
+  return supplied;
+}
+
+export function isSupplied(map, state, id) {
+  return supplyNetwork(map, state)[id] === 1;
+}
+
 export function defenseMultiplier(map, state, id, building = state.buildings[id]) {
   const p = map.provinces[id];
-  return (
+  const holder = state.owner[id];
+  const base =
     TERRAIN_DEFENSE[p.terrain] +
-    (building === BUILDING.FORT ? FORT_BONUS : 0) +
-    (p.capitalOf >= 0 ? CAPITAL_BONUS : 0)
-  );
+    (building === BUILDING.FORT ? fortBonus(holder) : 0) +
+    (p.capitalOf >= 0 ? CAPITAL_BONUS : 0) +
+    (p.city && hasTrait(holder, "fortress") ? FORTRESS_CITY_BONUS : 0);
+  return holder !== NEUTRAL && !isSupplied(map, state, id) ? base * SUPPLY_DEFENSE : base;
 }
 
 export function defenseStrength(map, state, id) {
@@ -106,10 +171,10 @@ export function factoryCount(state, nation) {
   return state.owner.filter((o, i) => o === nation && state.buildings[i] === BUILDING.FACTORY).length;
 }
 
-export function ordersCost(orders) {
+export function ordersCost(orders, nation) {
   let cost = 0;
   for (const id in orders.recruits) cost += orders.recruits[id];
-  for (const id in orders.builds) cost += BUILD_COST[orders.builds[id]];
+  for (const id in orders.builds) cost += buildCost(nation, orders.builds[id]);
   return cost;
 }
 
@@ -125,8 +190,8 @@ export function sanitizeOrders(map, state, nation, orders) {
     const kind = Number(orders.builds[key]);
     if (!owns(id) || !provinces[id].city || state.buildings[id] !== BUILDING.NONE) continue;
     if (kind !== BUILDING.FORT && kind !== BUILDING.FACTORY) continue;
-    if (budget < BUILD_COST[kind]) continue;
-    budget -= BUILD_COST[kind];
+    if (budget < buildCost(nation, kind)) continue;
+    budget -= buildCost(nation, kind);
     clean.builds[id] = kind;
   }
 
@@ -154,22 +219,23 @@ export function sanitizeOrders(map, state, nation, orders) {
   return clean;
 }
 
-function settleHeadOnClashes(moves) {
+function survivorsOf(count, strength, enemyStrength) {
+  if (strength - enemyStrength < 1e-9) return 0;
+  const perTroop = strength / count;
+  return Math.min(count, Math.max(1, Math.ceil((strength - enemyStrength) / perTroop - 1e-9)));
+}
+
+function settleHeadOnClashes(moves, turn) {
   for (const a of moves) {
     for (const b of moves) {
       if (a === b || a.nation === b.nation || a.count <= 0 || b.count <= 0) continue;
       if (a.from !== b.to || a.to !== b.from) continue;
-      const diff = a.count - b.count;
-      if (diff >= 0) {
-        a.count = diff;
-        b.count = 0;
-        b.stop = 0.5;
-      }
-      if (diff <= 0) {
-        b.count = -diff;
-        a.count = 0;
-        a.stop = 0.5;
-      }
+      const sa = attackStrength(a.nation, a.count, turn);
+      const sb = attackStrength(b.nation, b.count, turn);
+      a.count = survivorsOf(a.count, sa, sb);
+      b.count = survivorsOf(b.count, sb, sa);
+      if (a.count === 0) a.stop = 0.5;
+      if (b.count === 0) b.stop = 0.5;
     }
   }
 }
@@ -191,7 +257,7 @@ function fightBattles(map, state, moves, owner, troops) {
     for (const nation of NATIONS) {
       const count = incoming[id][nation] + (nation === holder ? troops[id] : 0);
       if (count > 0) {
-        const strength = nation === holder ? count * multiplier : count;
+        const strength = nation === holder ? count * multiplier : attackStrength(nation, count, state.turn);
         forces.push({ nation, count, strength });
       }
     }
@@ -210,15 +276,14 @@ function fightBattles(map, state, moves, owner, troops) {
     forces.sort((a, b) => b.strength - a.strength);
     battles.push(id);
     const [victor, runnerUp] = forces;
-    if (victor.strength - runnerUp.strength < 1e-9) {
+    const survivors = survivorsOf(victor.count, victor.strength, runnerUp.strength);
+    if (survivors === 0) {
       troops[id] = 0;
       continue;
     }
-    const perTroop = victor.strength / victor.count;
-    const survivors = Math.ceil((victor.strength - runnerUp.strength) / perTroop - 1e-9);
     if (victor.nation !== holder) captures.push({ province: id, from: holder, to: victor.nation });
     owner[id] = victor.nation;
-    troops[id] = Math.min(victor.count, Math.max(1, survivors));
+    troops[id] = survivors;
   }
   return { battles, captures };
 }
@@ -259,7 +324,7 @@ export function resolveTurn(map, state, ordersByNation) {
     }
   }
 
-  settleHeadOnClashes(moves);
+  settleHeadOnClashes(moves, state.turn);
   const { battles, captures } = fightBattles(map, state, moves, owner, troops);
 
   for (const nation of NATIONS) {
@@ -267,7 +332,7 @@ export function resolveTurn(map, state, ordersByNation) {
     if (!orders || !state.alive[nation]) continue;
     for (const key in orders.builds) {
       const id = Number(key);
-      industry[nation] -= BUILD_COST[orders.builds[key]];
+      industry[nation] -= buildCost(nation, orders.builds[key]);
       if (owner[id] === nation && buildings[id] === BUILDING.NONE) buildings[id] = orders.builds[key];
     }
     for (const key in orders.recruits) {
@@ -275,6 +340,20 @@ export function resolveTurn(map, state, ordersByNation) {
       industry[nation] -= orders.recruits[key];
       if (owner[id] === nation) troops[id] += orders.recruits[key];
     }
+  }
+
+  for (const p of map.provinces) {
+    const holder = owner[p.id];
+    if (p.city && p.capitalOf < 0 && holder !== NEUTRAL && hasTrait(holder, "mobilization")) troops[p.id]++;
+  }
+
+  const attrition = [];
+  const supplied = supplyNetwork(map, { owner });
+  for (const p of map.provinces) {
+    if (!p.land || supplied[p.id] || troops[p.id] <= 0) continue;
+    const lost = Math.max(1, Math.floor(troops[p.id] / 4));
+    troops[p.id] -= lost;
+    attrition.push({ province: p.id, lost });
   }
 
   const next = {
@@ -293,6 +372,7 @@ export function resolveTurn(map, state, ordersByNation) {
       ? Math.max(0, next.industry[nation]) + income(map, next, nation)
       : 0;
   }
+  const world = rollWorldEvent(map, next);
   next.winner = decideWinner(map, next);
 
   return {
@@ -301,6 +381,64 @@ export function resolveTurn(map, state, ordersByNation) {
       moves: moves.map(({ nation, from, to, sent, stop }) => ({ nation, from, to, sent, stop })),
       battles,
       captures,
+      attrition,
+      world,
     },
   };
+}
+
+function strongestNation(map, state, alive) {
+  return alive
+    .slice()
+    .sort(
+      (a, b) =>
+        victoryPoints(map, state, b) - victoryPoints(map, state, a) ||
+        provinceCount(state, b) - provinceCount(state, a) ||
+        a - b,
+    )[0];
+}
+
+function rollWorldEvent(map, next) {
+  const rng = createRng((map.seed ^ Math.imul(next.turn, 0x2c1b3c6d)) >>> 0);
+  if (next.turn < 3 || rng() > EVENT_CHANCE) return null;
+  const alive = NATIONS.filter((n) => next.alive[n]);
+  if (alive.length < 2) return null;
+
+  const kind = WORLD_EVENTS[Math.floor(rng() * WORLD_EVENTS.length)];
+  const leader = strongestNation(map, next, alive);
+  const underdog = alive.slice().sort((a, b) => provinceCount(next, a) - provinceCount(next, b) || a - b)[0];
+  const random = alive[Math.floor(rng() * alive.length)];
+
+  if (kind === "volunteers") {
+    const capital = map.capitals[underdog];
+    const province =
+      next.owner[capital] === underdog
+        ? capital
+        : map.provinces.find((p) => p.city && next.owner[p.id] === underdog)?.id;
+    if (province === undefined) return null;
+    next.troops[province] += 3;
+    return { kind, nation: underdog, province, amount: 3 };
+  }
+  if (kind === "boom") {
+    next.industry[random] += 5;
+    return { kind, nation: random, province: -1, amount: 5 };
+  }
+  if (kind === "strikes") {
+    const amount = Math.min(4, next.industry[leader]);
+    if (amount <= 0) return null;
+    next.industry[leader] -= amount;
+    return { kind, nation: leader, province: -1, amount };
+  }
+  if (kind === "partisans") {
+    const spots = map.provinces.filter(
+      (p) => !p.city && next.owner[p.id] === leader && next.troops[p.id] >= 2,
+    );
+    if (!spots.length) return null;
+    const province = spots[Math.floor(rng() * spots.length)].id;
+    const amount = Math.ceil(next.troops[province] / 2);
+    next.troops[province] -= amount;
+    return { kind, nation: leader, province, amount };
+  }
+  for (const n of alive) next.industry[n] += 2;
+  return { kind, nation: NEUTRAL, province: -1, amount: 2 };
 }
