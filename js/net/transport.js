@@ -1,3 +1,4 @@
+import { openPeerDirectory } from "./peer-directory.js";
 import { joinPeerRoom } from "./peer-room.js";
 
 const PEERJS_SOURCES = [
@@ -5,9 +6,6 @@ const PEERJS_SOURCES = [
   "https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js",
 ];
 const CLAUDE_WAIT_MS = 3000;
-const DIRECTORY_ID = "frontlines-1936-directory";
-const ELECTION_ROUNDS = 4;
-const WATCHDOG_MS = 2000;
 
 function loadScript(src) {
   return new Promise((resolve) => {
@@ -49,80 +47,6 @@ async function waitForClaude() {
   return Boolean(window.claude?.use);
 }
 
-async function electDirectory(options) {
-  for (let round = 0; round < ELECTION_ROUNDS; round++) {
-    try {
-      return await joinPeerRoom(DIRECTORY_ID, "host", { options });
-    } catch (error) {
-      if (error.code !== "taken") throw error;
-    }
-    try {
-      return await joinPeerRoom(DIRECTORY_ID, "guest", { options });
-    } catch (error) {
-      if (error.code !== "not_found") throw error;
-    }
-  }
-  throw { code: "unavailable" };
-}
-
-async function openPeerDirectory(options) {
-  const listeners = new Set();
-  let own = {};
-  let room = null;
-  let unsubscribe = null;
-  let closed = false;
-  let offlineChecks = 0;
-
-  const forward = (change) => listeners.forEach((listener) => listener(change));
-  const connect = async () => {
-    const joined = await electDirectory(options);
-    if (closed) {
-      joined.leave();
-      return;
-    }
-    room = joined;
-    unsubscribe = room.onPeers(forward);
-    if (Object.keys(own).length) room.presence(own);
-  };
-
-  const watchdog = setInterval(async () => {
-    if (closed || !room) return;
-    offlineChecks = room.connected() ? 0 : offlineChecks + 1;
-    if (offlineChecks < 3) return;
-    offlineChecks = 0;
-    unsubscribe?.();
-    const lost = room;
-    room = null;
-    lost.leave();
-    forward({ peers: [] });
-    try {
-      await connect();
-    } catch {}
-  }, WATCHDOG_MS);
-
-  await connect();
-  return {
-    peers: () => (room ? room.peers() : []),
-    onPeers(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    async presence(patch) {
-      for (const key in patch) {
-        if (patch[key] === null) delete own[key];
-        else own[key] = patch[key];
-      }
-      await room?.presence(patch);
-    },
-    async leave() {
-      closed = true;
-      clearInterval(watchdog);
-      unsubscribe?.();
-      await room?.leave();
-    },
-  };
-}
-
 function claudeTransport(room) {
   return {
     kind: "claude",
@@ -142,7 +66,7 @@ function peerTransport() {
     kind: "peer",
     join: (code, role, resume) =>
       joinPeerRoom(`frontlines-1936-${code.toLowerCase()}`, role, { resume, options }),
-    openDirectory: () => openPeerDirectory(options),
+    openDirectory: (hooks) => openPeerDirectory(options, hooks),
   };
 }
 

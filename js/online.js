@@ -121,7 +121,7 @@ let listingKey = null;
 export function openDirectory() {
   if (directory) return Promise.resolve(directory);
   directoryOpening ??= transportReady
-    .then((transport) => transport?.openDirectory())
+    .then((transport) => transport?.openDirectory({ browsing: () => currentScreen() === "online" }))
     .then((opened) => {
       if (!opened) return null;
       directory = opened;
