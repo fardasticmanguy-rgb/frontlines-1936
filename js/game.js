@@ -26,6 +26,7 @@ import {
 } from "./render.js";
 import {
   FACTORY_OUTPUT,
+  areAllied,
   attackStrength,
   buildCostAt,
   canBuild,
@@ -76,6 +77,7 @@ export function newGame(mode, seats, seed, options = {}) {
     animation: null,
     hint: null,
     report: null,
+    selectedNation: -1,
     timer: options.timer || 0,
     deadline: 0,
     lastTick: -1,
@@ -158,6 +160,10 @@ export function ordersChanged() {
 
 export function addMove(from, to, count) {
   const game = store.game;
+  if (areAllied(game.state, game.me, game.state.owner[to])) {
+    toast("You can't attack your ally");
+    return;
+  }
   const orders = game.orders[game.me];
   const free = availableFrom(from);
   const existing = orders.moves.find((m) => m.from === from && m.to === to);
@@ -199,6 +205,18 @@ export function applyPanelAction(action, { from, to, id }) {
     }
     case "unrecruit":
       if (orders.recruits[id] && --orders.recruits[id] <= 0) delete orders.recruits[id];
+      break;
+    case "diplo-offer":
+      orders.offer = id;
+      break;
+    case "diplo-withdraw":
+      orders.offer = -1;
+      break;
+    case "diplo-break":
+      orders.breakAlliance = 1;
+      break;
+    case "diplo-keep":
+      orders.breakAlliance = 0;
       break;
     case "fort":
     case "factory": {
@@ -400,6 +418,31 @@ function reportSeason(before, after) {
   }
 }
 
+function reportDiplomacy(events) {
+  const { game } = store;
+  const me = game.me;
+  for (const d of events.diplomacy || []) {
+    const a = NATION_NAMES[d.a];
+    const b = NATION_NAMES[d.b];
+    if (d.kind === "alliance") {
+      postNews(
+        `${a} AND ${b} SIGN A PACT`,
+        "The two nations will fight side by side and share their supply lines.",
+        d.a,
+      );
+      playSound("pact");
+    } else if (d.kind === "break") {
+      if (d.b === me)
+        postNews(`${a} BETRAYS ${b}`, `${a} has torn up the alliance. Watch your borders!`, d.a);
+      else postNews(`THE ${a}–${b} PACT IS OVER`, `${a} walks away from the alliance.`, d.a);
+      playSound("defeat");
+    } else if (d.kind === "offer" && d.b === me) {
+      postNews(`${a} PROPOSES AN ALLIANCE`, "Tap their flag in the top bar to accept or ignore it.", d.a);
+      playSound("news");
+    }
+  }
+}
+
 function reportWorldEvent(event) {
   if (!event) return;
   const { map } = store;
@@ -467,6 +510,7 @@ export function applyAnimation() {
   reportIndustry(animation);
   reportSeason(animation.before, animation.after);
   reportWorldEvent(animation.events.world);
+  reportDiplomacy(animation.events);
   game.report = buildReport(animation);
   for (const n of NATIONS) {
     if (animation.before.alive[n] && !animation.after.alive[n]) {

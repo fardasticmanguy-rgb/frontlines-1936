@@ -5,6 +5,7 @@ import { BUILDING, NATIONS, NEUTRAL, SUPPLY_DEFENSE, isWinter } from "../js/conf
 import { generateMap } from "../js/map.js";
 import {
   WORLD_EVENTS,
+  allianceGoal,
   buildCost,
   fortBonus,
   createInitialState,
@@ -14,6 +15,8 @@ import {
   isSupplied,
   resolveTurn,
   sanitizeOrders,
+  victoryGoal,
+  victoryPoints,
 } from "../js/rules.js";
 
 const map = generateMap(4242);
@@ -156,6 +159,97 @@ describe("resolveTurn", () => {
     assert.equal(buildCost(3, BUILDING.FORT), 4);
     assert.equal(fortBonus(3), 0.75);
     assert.equal(buildCost(2, BUILDING.FORT), 6);
+  });
+});
+
+describe("alliances", () => {
+  const offer = (target) => ({ ...emptyOrders(), offer: target });
+  const allied = (state) => Object.assign(state, { allies: [-1, 3, -1, 1], offers: [-1, -1, -1, -1] });
+
+  test("an alliance forms once both sides have offered it", () => {
+    let state = blankState();
+    let result = resolveTurn(map, state, ordersFor({ 1: offer(3) }));
+    assert.deepEqual(result.state.allies, [-1, -1, -1, -1]);
+    assert.equal(result.state.offers[1], 3);
+    assert.deepEqual(result.events.diplomacy, [{ kind: "offer", a: 1, b: 3 }]);
+    result = resolveTurn(map, result.state, ordersFor({ 3: offer(1) }));
+    assert.deepEqual(result.state.allies, [-1, 3, -1, 1]);
+    assert.deepEqual(result.state.offers, [-1, -1, -1, -1]);
+    assert.ok(result.events.diplomacy.some((d) => d.kind === "alliance"));
+  });
+
+  test("allies cannot attack each other", () => {
+    const state = allied(frontline(1, 6, 3, 1));
+    const clean = sanitizeOrders(map, state, 1, move(home, front, 6));
+    assert.deepEqual(clean.moves, []);
+  });
+
+  test("allies attacking the same province fight as one army", () => {
+    const together = allied(frontline(1, 5, 3, 0));
+    together.owner[front] = NEUTRAL;
+    together.troops[front] = 8;
+    together.troops[depot] = 5;
+    const orders = ordersFor({ 1: move(home, front, 5), 3: move(depot, front, 5) });
+    const joint = resolveTurn(map, together, orders).state;
+    assert.ok([1, 3].includes(joint.owner[front]));
+    assert.equal(joint.troops[front], 2);
+
+    const apart = frontline(1, 5, 3, 0);
+    apart.owner[front] = NEUTRAL;
+    apart.troops[front] = 8;
+    apart.troops[depot] = 5;
+    assert.equal(resolveTurn(map, apart, orders).state.owner[front], NEUTRAL);
+  });
+
+  test("supply lines run through allied territory", () => {
+    const chain = provinces
+      .filter((p) => p.land && !p.city)
+      .flatMap((p) =>
+        p.neighbors
+          .filter((q) => provinces[q].land && !provinces[q].city)
+          .map((q) => [
+            p.id,
+            q,
+            provinces[q].neighbors.find(
+              (c) =>
+                provinces[c].city && provinces[c].capitalOf < 0 && !provinces[p.id].neighbors.includes(c),
+            ),
+          ]),
+      )
+      .find(([, , c]) => c !== undefined);
+    const [pocket, corridor, city] = chain;
+    const state = blankState();
+    Object.assign(state.owner, { [pocket]: 1, [corridor]: 3, [city]: 1 });
+    assert.equal(isSupplied(map, state, pocket), false);
+    allied(state);
+    assert.equal(isSupplied(map, state, pocket), true);
+  });
+
+  test("breaking an alliance ends it at the end of the turn", () => {
+    const state = allied(blankState());
+    const { state: next, events } = resolveTurn(
+      map,
+      state,
+      ordersFor({ 3: { ...emptyOrders(), breakAlliance: 1 } }),
+    );
+    assert.deepEqual(next.allies, [-1, -1, -1, -1]);
+    assert.deepEqual(events.diplomacy, [{ kind: "break", a: 3, b: 1 }]);
+  });
+
+  test("an alliance wins together but needs a bigger share", () => {
+    assert.ok(allianceGoal(map) > victoryGoal(map));
+    const state = blankState();
+    let points = 6;
+    for (const p of provinces) {
+      if (!p.city || p.capitalOf >= 0 || points >= allianceGoal(map)) continue;
+      state.owner[p.id] = points % 2 ? 1 : 3;
+      points++;
+    }
+    assert.ok(victoryPoints(map, state, 1) < victoryGoal(map));
+    assert.ok(victoryPoints(map, state, 3) < victoryGoal(map));
+    assert.equal(resolveTurn(map, state, ordersFor({})).state.winner, -1);
+    const { state: next } = resolveTurn(map, allied(state), ordersFor({}));
+    assert.ok([1, 3].includes(next.winner));
   });
 });
 
