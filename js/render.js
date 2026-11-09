@@ -9,10 +9,20 @@ import {
   clamp,
 } from "./config.js";
 import { flagCanvases } from "./flags.js";
-import { canPlan } from "./game.js";
+import { canOrder, canPlan, selection } from "./game.js";
 import { pointInPolygon } from "./geometry.js";
 import { createRng } from "./random.js";
-import { areAllied, attackStrength, defenseStrength, supplyNetwork, winterActive } from "./rules.js";
+import {
+  areAllied,
+  armorOf,
+  attackStrength,
+  defenseStrength,
+  flankBonus,
+  gunsOf,
+  siegeOf,
+  supplyNetwork,
+  winterActive,
+} from "./rules.js";
 import { store } from "./store.js";
 import { mapMatrix, updateLayout, view } from "./view.js";
 
@@ -89,14 +99,19 @@ function pathsFor(map) {
   let paths = pathCache.get(map);
   if (paths) return paths;
   const land = new Path2D();
+  const trace = (path, ring) => {
+    ring.forEach(([x, y], k) => (k ? path.lineTo(x, y) : path.moveTo(x, y)));
+    path.closePath();
+  };
   const provinces = map.provinces.map((p) => {
     const path = new Path2D();
-    p.polygon.forEach(([x, y], k) => (k ? path.lineTo(x, y) : path.moveTo(x, y)));
-    path.closePath();
+    for (const ring of [...(p.rings ?? [p.polygon]), ...(p.holes ?? [])]) trace(path, ring);
     if (p.land) land.addPath(path);
     return path;
   });
-  paths = { land, provinces, areas: map.provinces.map((p) => polygonArea(p.polygon)) };
+  const decor = new Path2D();
+  for (const ring of map.decor ?? []) trace(decor, ring);
+  paths = { land, decor, provinces, areas: map.provinces.map((p) => polygonArea(p.polygon)) };
   pathCache.set(map, paths);
   return paths;
 }
@@ -230,13 +245,15 @@ function buildLayers() {
   g.strokeStyle = "rgba(190, 220, 225, 0.07)";
   g.lineWidth = 1;
   g.beginPath();
-  for (let x = 100; x < MAP_WIDTH; x += 100) {
+  const gridWidth = map.width ?? MAP_WIDTH;
+  const gridHeight = map.height ?? MAP_HEIGHT;
+  for (let x = 100; x < gridWidth; x += 100) {
     g.moveTo(x, 0);
-    g.lineTo(x, MAP_HEIGHT);
+    g.lineTo(x, gridHeight);
   }
-  for (let y = 100; y < MAP_HEIGHT; y += 100) {
+  for (let y = 100; y < gridHeight; y += 100) {
     g.moveTo(0, y);
-    g.lineTo(MAP_WIDTH, y);
+    g.lineTo(gridWidth, y);
   }
   g.stroke();
 
@@ -249,6 +266,11 @@ function buildLayers() {
     g.strokeStyle = color;
     g.lineWidth = width;
     g.stroke(paths.land);
+    if (map.decor) g.stroke(paths.decor);
+  }
+  if (map.decor) {
+    g.fillStyle = "#8f8a74";
+    g.fill(paths.decor);
   }
   for (const p of provinces) {
     if (!p.land) continue;
@@ -280,6 +302,15 @@ function buildLayers() {
   r.strokeStyle = "rgba(55, 45, 28, 0.42)";
   r.lineWidth = 0.9;
   strokeEdges(r, map, (e) => provinces[e.a].land && provinces[e.b].land);
+  if (map.scenario === "europe") {
+    r.strokeStyle = "rgba(28, 24, 16, 0.8)";
+    r.lineWidth = 1.7;
+    strokeEdges(
+      r,
+      map,
+      (e) => provinces[e.a].land && provinces[e.b].land && provinces[e.a].owner !== provinces[e.b].owner,
+    );
+  }
   r.strokeStyle = "rgba(30, 32, 26, 0.9)";
   r.lineWidth = 1.6;
   strokeEdges(r, map, (e) => provinces[e.a].land !== provinces[e.b].land);
@@ -463,7 +494,50 @@ function drawArrow(map, from, to, color, alpha, label, winning) {
   ctx.globalAlpha = 1;
 }
 
-function drawCounter(x, y, troops, nation, lifted) {
+function drawTankBadge(x, y, tanks) {
+  const text = String(tanks);
+  const w = 14 + text.length * 5.6;
+  roundedRect(ctx, x, y, w, 11, 1.5);
+  ctx.fillStyle = "#4a4223";
+  ctx.fill();
+  ctx.strokeStyle = "#0d0e0a";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#e8cf72";
+  ctx.fillRect(x + 2.5, y + 5, 7, 3.4);
+  ctx.fillRect(x + 4.2, y + 3, 3.4, 2.4);
+  ctx.fillRect(x + 7.4, y + 3.6, 3.6, 1);
+  ctx.font = `600 9px ${FONT}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + 12, y + 5.8);
+}
+
+function drawGunBadge(x, y, guns) {
+  const text = String(guns);
+  const w = 13 + text.length * 5.6;
+  roundedRect(ctx, x, y, w, 11, 1.5);
+  ctx.fillStyle = "#3d2a22";
+  ctx.fill();
+  ctx.strokeStyle = "#0d0e0a";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#ff9b6a";
+  ctx.beginPath();
+  ctx.arc(x + 4.5, y + 7.2, 2.2, 0, TAU);
+  ctx.fill();
+  ctx.save();
+  ctx.translate(x + 4.5, y + 6.5);
+  ctx.rotate(-0.6);
+  ctx.fillRect(0, -0.8, 6.5, 1.6);
+  ctx.restore();
+  ctx.font = `600 9px ${FONT}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + 11, y + 5.8);
+}
+
+function drawCounter(x, y, troops, nation, lifted, tanks = 0, guns = 0) {
   const text = String(troops);
   const numberWidth = 7 + text.length * 6.2;
   const flagWidth = nation >= 0 ? 14 : 0;
@@ -495,6 +569,8 @@ function drawCounter(x, y, troops, nation, lifted) {
     ctx.fillStyle = "#69b543";
     ctx.fillRect(x0 + 1.5, y0 + h - 2.2, (w - 3) * Math.min(1, troops / 16), 1.4);
   }
+  if (tanks > 0) drawTankBadge(x0 + w - 3, y0 + h - 4, tanks);
+  if (guns > 0) drawGunBadge(x0 - 10 - String(guns).length * 5.6, y0 + h - 4, guns);
 }
 
 function drawStar(x, y, r, color) {
@@ -652,6 +728,25 @@ function drawSupply(map, state, paths) {
   for (const p of map.provinces) {
     if (!p.land || supplied[p.id] || state.owner[p.id] < 0) continue;
     ctx.fill(paths.provinces[p.id]);
+  }
+}
+
+function drawPockets(map, state, paths) {
+  const siege = siegeOf(state);
+  const pulse = 0.55 + 0.45 * Math.sin((performance.now() / 1000) * 4);
+  ctx.strokeStyle = `rgba(255, 70, 50, ${0.5 + 0.4 * pulse})`;
+  ctx.lineWidth = 2.4;
+  ctx.setLineDash([6, 3]);
+  for (const p of map.provinces) {
+    if (!p.land || !siege[p.id] || state.owner[p.id] < 0) continue;
+    ctx.stroke(paths.provinces[p.id]);
+  }
+  ctx.setLineDash([]);
+  for (const p of map.provinces) {
+    if (!p.land || !siege[p.id] || state.owner[p.id] < 0) continue;
+    upright(ctx, p.x, p.y);
+    drawText(`POCKET ${siege[p.id]}/3`, 0, -14, `700 9px ${FONT}`, "#ff8a6b");
+    ctx.restore();
   }
 }
 
@@ -848,16 +943,49 @@ function drawSelection(game, map, state, paths) {
     ctx.stroke(paths.provinces[selected.id]);
   }
 
+  if (canPlan()) {
+    ctx.strokeStyle = "rgba(255, 246, 216, 0.85)";
+    ctx.lineWidth = 2;
+    for (const id of selection()) {
+      if (id === game.selected) continue;
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = "#fff";
+      ctx.fill(paths.provinces[id]);
+      ctx.globalAlpha = 1;
+      ctx.stroke(paths.provinces[id]);
+    }
+  }
+
   if (game.drag && game.hover >= 0) {
-    const reachable = map.provinces[game.drag.from].neighbors.includes(game.hover);
+    const reachable = canOrder(game.drag.from, game.hover);
     ctx.strokeStyle = reachable ? "#fff6d8" : "rgba(255, 120, 90, 0.8)";
     ctx.lineWidth = 2.6;
     ctx.stroke(paths.provinces[game.hover]);
+  } else if (!game.drag && game.hover >= 0 && game.hover !== game.selected && map.provinces[game.hover]) {
+    const reachable = canPlan() && selection().some((id) => canOrder(id, game.hover));
+    ctx.strokeStyle = reachable ? "rgba(255, 210, 120, 0.95)" : "rgba(255, 246, 216, 0.45)";
+    ctx.lineWidth = reachable ? 2.2 : 1.4;
+    ctx.stroke(paths.provinces[game.hover]);
+  }
+
+  const box = game.box;
+  if (box?.active) {
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = "#fff6d8";
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = "rgba(255, 246, 216, 0.08)";
+    const x = Math.min(box.x0, box.x1);
+    const y = Math.min(box.y0, box.y1);
+    ctx.fillRect(x, y, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
+    ctx.strokeRect(x, y, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
+    ctx.setLineDash([]);
   }
 }
 
 function drawProvinceMarkers(map, state) {
   const time = performance.now() / 1000;
+  const armor = armorOf(state);
+  const guns = gunsOf(state);
   for (const p of map.provinces) {
     if (!p.land || !p.city) continue;
     upright(ctx, p.x, p.y);
@@ -867,7 +995,7 @@ function drawProvinceMarkers(map, state) {
   for (const p of map.provinces) {
     if (!p.land) continue;
     upright(ctx, p.x, p.y);
-    drawCounter(0, 3, state.troops[p.id], state.owner[p.id]);
+    drawCounter(0, 3, state.troops[p.id], state.owner[p.id], false, armor[p.id], guns[p.id]);
     if (state.forts[p.id]) drawFort();
     if (state.factories[p.id]) drawFactory(state.factories[p.id], time);
     ctx.restore();
@@ -876,15 +1004,36 @@ function drawProvinceMarkers(map, state) {
 
 function drawOrders(game, map, state) {
   const orders = game.orders[game.me];
+  const assault = new Map();
+  for (const m of orders.moves) {
+    const terrain = map.provinces[m.to].terrain;
+    const entry = assault.get(m.to) ?? { strength: 0, sources: new Set() };
+    entry.strength += attackStrength(state, game.me, m.count, m.armor || 0, terrain, m.guns || 0);
+    entry.sources.add(m.from);
+    assault.set(m.to, entry);
+  }
   for (const m of orders.moves) {
     const friendly = state.owner[m.to] === game.me;
-    const winning = friendly || attackStrength(state, game.me, m.count) > defenseStrength(map, state, m.to);
+    const entry = assault.get(m.to);
+    const winning =
+      friendly || entry.strength * (1 + flankBonus(entry.sources.size)) > defenseStrength(map, state, m.to);
     drawArrow(map, m.from, m.to, friendly ? MOVE_COLOR : ATTACK_COLOR, 0.92, m.count, winning);
   }
-  for (const id in orders.recruits) {
+  const produced = new Set([
+    ...Object.keys(orders.recruits),
+    ...Object.keys(orders.tanks ?? {}),
+    ...Object.keys(orders.artillery ?? {}),
+  ]);
+  for (const id of produced) {
     const p = map.provinces[id];
+    const infantry = orders.recruits[id] || 0;
+    const tanks = orders.tanks?.[id] || 0;
+    const guns = orders.artillery?.[id] || 0;
+    const label = [infantry ? `+${infantry}` : "", tanks ? `+${tanks}🛡` : "", guns ? `+${guns}💥` : ""]
+      .filter(Boolean)
+      .join(" ");
     upright(ctx, p.x, p.y);
-    drawText(`+${orders.recruits[id]}`, 1, 18, `700 12px ${FONT}`, "#9fe07f");
+    drawText(label, 1, 18, `700 12px ${FONT}`, "#9fe07f");
     ctx.restore();
   }
   for (const id in orders.builds) {
@@ -909,8 +1058,9 @@ function drawOrders(game, map, state) {
 function drawDragLine(game, map) {
   if (!game.drag || !game.drag.active) return;
   const p = map.provinces[game.drag.from];
+  const friendly = game.hover >= 0 && game.state.owner[game.hover] === game.me;
   ctx.globalAlpha = 0.9;
-  ctx.strokeStyle = ATTACK_COLOR;
+  ctx.strokeStyle = friendly ? MOVE_COLOR : ATTACK_COLOR;
   ctx.lineWidth = 4;
   ctx.setLineDash([9, 6]);
   ctx.beginPath();
@@ -1067,6 +1217,7 @@ export function render(dt) {
   drawNationLabels(map, state, paths);
   drawFlashes(paths, dt);
   drawBorders(map, state, game.me);
+  drawPockets(map, state, paths);
   drawSelection(game, map, state, paths);
   drawProvinceMarkers(map, state);
   if (canPlan()) drawOrders(game, map, state);

@@ -1,21 +1,38 @@
 import { unlockAudio, playSound } from "./audio.js";
-import { addMove, availableFrom, canPlan } from "./game.js";
+import {
+  addMove,
+  availableFrom,
+  canOrder,
+  canPlan,
+  clearMovesFrom,
+  endTurn,
+  orderFromSelection,
+  selection,
+  undoOrders,
+} from "./game.js";
 import { pointInPolygon } from "./geometry.js";
 import { areAllied } from "./rules.js";
 import { canvas } from "./render.js";
 import { store } from "./store.js";
-import { keepAwake, renderPanel, toast } from "./ui.js";
-import { clampPan, screenToMap, screenToView, view, zoomAt } from "./view.js";
+import { currentScreen, hideTooltip, keepAwake, renderPanel, renderTooltip, toast } from "./ui.js";
+import { clampPan, resetZoom, screenToMap, screenToView, view, zoomAt } from "./view.js";
 
-const DRAG_THRESHOLD = 12;
-const PICK_RADIUS = 24;
+const DRAG_THRESHOLD = 9;
+const PICK_RADIUS = 18;
+const KEY_PAN = 70;
 
 const touches = new Map();
 let pinch = null;
 
-function provinceAt(x, y) {
+function ringsOf(p) {
+  return p.rings ?? [p.polygon];
+}
+
+export function provinceAt(x, y) {
   const { provinces } = store.map;
-  for (const p of provinces) if (p.land && pointInPolygon(p.polygon, x, y)) return p.id;
+  for (const p of provinces) {
+    if (p.land && ringsOf(p).some((ring) => pointInPolygon(ring, x, y))) return p.id;
+  }
 
   let nearest = -1;
   let best = PICK_RADIUS * PICK_RADIUS;
@@ -39,6 +56,7 @@ function startPinch(game) {
   const [a, b] = [...touches.values()];
   game.drag = null;
   game.pointer = null;
+  game.box = null;
   game.hover = -1;
   game.pinching = true;
   pinch = {
@@ -48,12 +66,18 @@ function startPinch(game) {
   };
 }
 
+function ownsProvince(game, id) {
+  return id >= 0 && game.state.owner[id] === game.me;
+}
+
 function onPointerDown(event) {
   unlockAudio();
   const game = activeGame();
   if (!game) return;
   keepAwake();
-  touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  hideTooltip();
+  const mouse = event.pointerType === "mouse";
+  if (!mouse) touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
   try {
     canvas.setPointerCapture(event.pointerId);
   } catch {}
@@ -74,11 +98,28 @@ function onPointerDown(event) {
     panX: game.panX,
     panY: game.panY,
     panning: false,
+    button: event.button,
+    mouse,
+    shift: event.shiftKey,
+    toggle: event.shiftKey || event.ctrlKey || event.metaKey,
   };
   game.drag = null;
-  if (id >= 0 && canPlan() && game.state.owner[id] === game.me && availableFrom(id) > 0) {
+  game.box = null;
+  if (event.button !== 0) return;
+  if (mouse && event.shiftKey && canPlan()) {
+    game.box = { x0: x, y0: y, x1: x, y1: y, active: false };
+    return;
+  }
+  if (canPlan() && ownsProvince(game, id) && availableFrom(id) > 0) {
     game.drag = { from: id, active: false, x, y };
   }
+}
+
+function updateHover(game, event) {
+  const [x, y] = screenToMap(event.clientX, event.clientY);
+  const id = provinceAt(x, y);
+  if (id !== game.hover) game.hover = id;
+  renderTooltip(event.clientX, event.clientY, id);
 }
 
 function onPointerMove(event) {
@@ -94,16 +135,28 @@ function onPointerMove(event) {
   }
 
   const pointer = game.pointer;
-  if (!pointer || pointer.id !== event.pointerId) return;
+  if (!pointer || pointer.id !== event.pointerId) {
+    if (event.pointerType === "mouse" && !currentScreen()) updateHover(game, event);
+    return;
+  }
   const moved = Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) > DRAG_THRESHOLD;
   const [x, y] = screenToMap(event.clientX, event.clientY);
 
+  if (game.box) {
+    game.box.x1 = x;
+    game.box.y1 = y;
+    if (moved) game.box.active = true;
+    return;
+  }
   if (game.drag) {
     game.drag.x = x;
     game.drag.y = y;
     if (moved) game.drag.active = true;
     game.hover = game.drag.active ? provinceAt(x, y) : -1;
-  } else if (moved && game.zoom > 1.01) {
+    if (pointer.mouse && game.drag.active) renderTooltip(event.clientX, event.clientY, game.hover);
+    return;
+  }
+  if (moved || pointer.panning) {
     pointer.panning = true;
     game.panX = pointer.panX - (event.clientX - pointer.startX) / view.scale;
     game.panY = pointer.panY - (event.clientY - pointer.startY) / view.scale;
@@ -111,47 +164,101 @@ function onPointerMove(event) {
   }
 }
 
+function finishBox(game, box) {
+  const { provinces } = store.map;
+  const x0 = Math.min(box.x0, box.x1);
+  const x1 = Math.max(box.x0, box.x1);
+  const y0 = Math.min(box.y0, box.y1);
+  const y1 = Math.max(box.y0, box.y1);
+  const picked = provinces
+    .filter((p) => p.land && ownsProvince(game, p.id) && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
+    .map((p) => p.id);
+  game.selectedNation = -1;
+  game.selected = picked[0] ?? -1;
+  game.group = picked;
+  if (picked.length) {
+    playSound("click");
+    toast(`${picked.length} provinces selected · right-click or tap a target to send them all`);
+  }
+  renderPanel();
+}
+
 function finishDrag(game, drag, target) {
-  const reachable =
-    target >= 0 && target !== drag.from && store.map.provinces[drag.from].neighbors.includes(target);
-  if (reachable && canPlan()) {
-    addMove(drag.from, target, availableFrom(drag.from));
+  if (target === drag.from || target < 0) return;
+  if (canOrder(drag.from, target)) {
+    addMove(drag.from, target);
     game.selected = drag.from;
+    game.group = [];
     renderPanel();
-  } else if (target >= 0 && target !== drag.from) {
-    toast("You can only move into a neighboring province");
+  } else if (areAllied(game.state, game.me, game.state.owner[target])) {
+    toast("You can't attack your ally");
+  } else {
+    toast("Too far: attack a neighbor, or redeploy up to 4 provinces through your own land");
   }
 }
 
-function handleTap(game, target) {
+function toggleInGroup(game, target) {
+  const group = selection();
+  const at = group.indexOf(target);
+  if (at >= 0) group.splice(at, 1);
+  else group.push(target);
+  game.group = group;
+  game.selected = group[0] ?? -1;
+  playSound("click");
+  renderPanel();
+}
+
+function handleTap(game, target, pointer) {
   game.selectedNation = -1;
   if (target < 0) {
     game.selected = -1;
+    game.group = [];
     renderPanel();
     return;
   }
-  const selected = game.selected;
-  const attackFromSelection =
-    selected >= 0 &&
-    selected !== target &&
-    canPlan() &&
-    game.state.owner[selected] === game.me &&
-    game.state.owner[target] !== game.me &&
-    store.map.provinces[selected].neighbors.includes(target) &&
-    availableFrom(selected) > 0;
-
-  if (attackFromSelection && areAllied(game.state, game.me, game.state.owner[target])) {
-    game.selected = target;
-    renderPanel();
+  if (pointer?.toggle && canPlan() && ownsProvince(game, target)) {
+    toggleInGroup(game, target);
     return;
   }
-  if (attackFromSelection) {
-    addMove(selected, target, availableFrom(selected));
+  const hostile = !ownsProvince(game, target) && !areAllied(game.state, game.me, game.state.owner[target]);
+  if (hostile && selection().some((id) => canOrder(id, target) && availableFrom(id) > 0)) {
+    orderFromSelection(target);
     return;
   }
-  game.selected = target === selected ? -1 : target;
+  game.group = [];
+  game.selected = target === game.selected ? -1 : target;
   playSound("click");
   renderPanel();
+}
+
+function handleRightClick(game, target, pointer) {
+  if (target < 0) {
+    game.selected = -1;
+    game.group = [];
+    renderPanel();
+    return;
+  }
+  if (!canPlan()) return;
+  const sources = selection();
+  if (!sources.length) {
+    if (ownsProvince(game, target)) {
+      game.selected = target;
+      game.group = [];
+      renderPanel();
+    } else toast("Select your province first, then right-click where to send it");
+    return;
+  }
+  if (sources.length === 1 && sources[0] === target) {
+    clearMovesFrom([target]);
+    return;
+  }
+  if (!orderFromSelection(target, pointer.shift ? 0.5 : 1)) {
+    toast(
+      areAllied(game.state, game.me, game.state.owner[target])
+        ? "You can't attack your ally"
+        : "Out of reach: attack a neighbor, or redeploy up to 4 provinces through your own land",
+    );
+  }
 }
 
 function onPointerEnd(event) {
@@ -172,14 +279,22 @@ function onPointerEnd(event) {
   const pointer = game.pointer;
   if (!pointer || pointer.id !== event.pointerId) return;
   const drag = game.drag;
+  const box = game.box;
   game.pointer = null;
   game.drag = null;
-  game.hover = -1;
-  if (event.type === "pointercancel" || pointer.panning) return;
+  game.box = null;
+  if (event.pointerType !== "mouse") game.hover = -1;
+  if (event.type === "pointercancel") return;
+  if (box?.active) {
+    finishBox(game, box);
+    return;
+  }
+  if (pointer.panning) return;
 
   const target = provinceAt(...screenToMap(event.clientX, event.clientY));
   if (drag?.active) finishDrag(game, drag, target);
-  else handleTap(game, target);
+  else if (pointer.button === 2) handleRightClick(game, target, pointer);
+  else if (pointer.button === 0) handleTap(game, target, pointer);
 }
 
 function onWheel(event) {
@@ -190,11 +305,82 @@ function onWheel(event) {
   zoomAt(game, game.zoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY, ...anchor);
 }
 
+function zoomCenter(game, factor) {
+  const x = view.centerX;
+  const y = view.centerY;
+  zoomAt(game, game.zoom * factor, x, y, ...screenToView(x, y));
+}
+
+function panKeys(game, dx, dy) {
+  game.panX += dx / view.scale;
+  game.panY += dy / view.scale;
+  clampPan(game);
+}
+
+function onKeyDown(event) {
+  const game = activeGame();
+  if (!game || currentScreen()) return;
+  if (event.target instanceof HTMLInputElement) return;
+  const key = event.key;
+  const lower = key.length === 1 ? key.toLowerCase() : key;
+  const command = event.ctrlKey || event.metaKey;
+
+  if (command && lower === "z") {
+    event.preventDefault();
+    undoOrders();
+    return;
+  }
+  if (command) return;
+  const pans = {
+    ArrowLeft: [-KEY_PAN, 0],
+    a: [-KEY_PAN, 0],
+    ArrowRight: [KEY_PAN, 0],
+    d: [KEY_PAN, 0],
+    ArrowUp: [0, -KEY_PAN],
+    w: [0, -KEY_PAN],
+    ArrowDown: [0, KEY_PAN],
+    s: [0, KEY_PAN],
+  };
+  if (pans[lower]) {
+    event.preventDefault();
+    const [dx, dy] = pans[lower];
+    panKeys(game, view.rotated ? -dy : dx, view.rotated ? dx : dy);
+    return;
+  }
+  if (lower === "+" || lower === "=" || lower === "e") zoomCenter(game, 1.25);
+  else if (lower === "-" || lower === "_" || lower === "q") zoomCenter(game, 0.8);
+  else if (lower === "f" || key === "Home") resetZoom(game);
+  else if (key === "Enter" || key === " ") {
+    event.preventDefault();
+    endTurn();
+  } else if (key === "Escape") {
+    game.selected = -1;
+    game.group = [];
+    game.selectedNation = -1;
+    game.panelView = "";
+    renderPanel();
+  } else if (key === "Delete" || key === "Backspace" || lower === "x") {
+    event.preventDefault();
+    clearMovesFrom(selection());
+  } else if (lower === "z") undoOrders();
+  else if (lower === "p") {
+    game.panelView = game.panelView === "production" ? "" : "production";
+    renderPanel();
+  }
+}
+
 export function bindMapInput() {
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerEnd);
   canvas.addEventListener("pointercancel", onPointerEnd);
+  canvas.addEventListener("pointerleave", (event) => {
+    if (event.pointerType !== "mouse") return;
+    const game = activeGame();
+    if (game && !game.pointer) game.hover = -1;
+    hideTooltip();
+  });
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  window.addEventListener("keydown", onKeyDown);
 }
