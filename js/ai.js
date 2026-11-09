@@ -1,0 +1,137 @@
+import { BUILD_COST, BUILDING, NEUTRAL } from "./config.js";
+import { defenseMultiplier, emptyOrders } from "./rules.js";
+
+function frontDistances(provinces, owns, mine) {
+  const distance = new Array(provinces.length).fill(Infinity);
+  const queue = [];
+  for (const id of mine) {
+    if (provinces[id].neighbors.some((n) => provinces[n].land && !owns(n))) {
+      distance[id] = 1;
+      queue.push(id);
+    }
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const id = queue[head];
+    for (const n of provinces[id].neighbors) {
+      if (owns(n) && distance[n] > distance[id] + 1) {
+        distance[n] = distance[id] + 1;
+        queue.push(n);
+      }
+    }
+  }
+  return distance;
+}
+
+export function planAiOrders(map, state, nation) {
+  const orders = emptyOrders();
+  if (!state.alive[nation]) return orders;
+
+  const { provinces } = map;
+  const owns = (id) => state.owner[id] === nation;
+  const mine = provinces.filter((p) => p.land && owns(p.id)).map((p) => p.id);
+  const threat = (id) =>
+    provinces[id].neighbors.reduce((max, n) => {
+      const other = state.owner[n];
+      return provinces[n].land && other !== NEUTRAL && other !== nation
+        ? Math.max(max, state.troops[n])
+        : max;
+    }, 0);
+  const distance = frontDistances(provinces, owns, mine);
+  const lateGame = state.turn > state.maxTurns - 4;
+  let budget = state.industry[nation];
+
+  const cities = mine.filter((id) => provinces[id].city);
+  const factories = mine.filter((id) => state.buildings[id] === BUILDING.FACTORY).length;
+  const factoryTarget = state.turn < 8 ? 2 : 3;
+  if (!lateGame && factories < factoryTarget && budget >= BUILD_COST[BUILDING.FACTORY] + 4) {
+    const site = cities
+      .filter((id) => state.buildings[id] === BUILDING.NONE)
+      .sort((a, b) => distance[b] - distance[a] || a - b)[0];
+    if (site !== undefined && threat(site) <= state.troops[site]) {
+      orders.builds[site] = BUILDING.FACTORY;
+      budget -= BUILD_COST[BUILDING.FACTORY];
+    }
+  }
+
+  for (const id of cities) {
+    if (state.buildings[id] !== BUILDING.NONE || orders.builds[id]) continue;
+    const exposed = threat(id) > state.troops[id] * defenseMultiplier(map, state, id);
+    if (exposed && budget >= BUILD_COST[BUILDING.FORT] + 3) {
+      orders.builds[id] = BUILDING.FORT;
+      budget -= BUILD_COST[BUILDING.FORT];
+      break;
+    }
+  }
+
+  while (budget > 0 && cities.length) {
+    let neediest = cities[0];
+    let bestNeed = -Infinity;
+    for (const id of cities) {
+      const garrison = state.troops[id] + (orders.recruits[id] || 0);
+      const need = threat(id) * 1.3 - garrison - Math.min(distance[id], 9) * 2;
+      if (need > bestNeed) {
+        bestNeed = need;
+        neediest = id;
+      }
+    }
+    orders.recruits[neediest] = (orders.recruits[neediest] || 0) + 1;
+    budget--;
+  }
+
+  const available = {};
+  const reserve = {};
+  for (const id of mine) {
+    available[id] = state.troops[id];
+    reserve[id] = Math.min(available[id], Math.ceil(threat(id) * (lateGame ? 0.32 : 0.5)));
+  }
+  const spare = (id) => available[id] - reserve[id];
+
+  const targets = new Set();
+  for (const id of mine) {
+    for (const n of provinces[id].neighbors) if (provinces[n].land && !owns(n)) targets.add(n);
+  }
+
+  const plans = [...targets]
+    .map((target) => {
+      const enemy = state.owner[target] !== NEUTRAL;
+      const defense = state.troops[target] * defenseMultiplier(map, state, target);
+      const need = Math.ceil(defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) + 1;
+      const value =
+        (provinces[target].city ? 5 : 1) +
+        (provinces[target].capitalOf >= 0 ? 8 : 0) +
+        (enemy ? 1.5 : 0.5) -
+        need * 0.15;
+      return { target, need, enemy, value };
+    })
+    .sort((a, b) => b.value - a.value || a.target - b.target);
+
+  for (const plan of plans) {
+    const sources = provinces[plan.target].neighbors
+      .filter((id) => owns(id) && spare(id) > 0)
+      .sort((a, b) => spare(b) - spare(a) || a - b);
+    const total = sources.reduce((sum, id) => sum + spare(id), 0);
+    if (total < plan.need) continue;
+
+    let remaining = plan.need + (plan.enemy ? 2 : 0);
+    for (const id of sources) {
+      if (remaining <= 0) break;
+      const count = Math.min(spare(id), remaining);
+      if (count <= 0) continue;
+      orders.moves.push({ from: id, to: plan.target, count });
+      available[id] -= count;
+      remaining -= count;
+    }
+  }
+
+  for (const id of mine) {
+    if (distance[id] <= 1 || distance[id] === Infinity || available[id] <= 0) continue;
+    const step = provinces[id].neighbors
+      .filter((n) => owns(n) && distance[n] < distance[id])
+      .sort((a, b) => distance[a] - distance[b] || threat(b) - threat(a) || a - b)[0];
+    if (step === undefined) continue;
+    orders.moves.push({ from: id, to: step, count: available[id] });
+    available[id] = 0;
+  }
+
+  return orders;
+}

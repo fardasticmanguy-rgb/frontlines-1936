@@ -1,0 +1,17 @@
+{
+  "name": "frontlines-1936",
+  "version": "1.0.0",
+  "description": "A four-player simultaneous-turn strategy game for tablets.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "npx serve -l 8080 .",
+    "test": "node --test",
+    "format": "prettier --write .",
+    "build": "node scripts/build-standalone.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "prettier": "^3.3.3"
+  }
+}
