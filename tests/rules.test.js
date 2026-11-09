@@ -6,6 +6,8 @@ import { generateMap } from "../js/map.js";
 import {
   RAIL_RANGE,
   WORLD_EVENTS,
+  atWar,
+  warPending,
   attackStrength,
   canReach,
   flankBonus,
@@ -51,6 +53,7 @@ function blankState() {
   state.forts.fill(0);
   state.factories.fill(0);
   state.industry = NATIONS.map(() => 50);
+  state.war = NATIONS.map(() => 0xff);
   for (const n of NATIONS.slice(0, map.nationCount)) {
     state.owner[map.capitals[n]] = n;
     state.troops[map.capitals[n]] = 1;
@@ -583,5 +586,38 @@ describe("artillery, flanking and deployment", () => {
     assert.equal(next.guns[home], 1);
     assert.equal(next.armor[front], 1);
     assert.equal(next.troops[front], 4);
+  });
+});
+
+describe("declaring war", () => {
+  test("nations at peace cannot attack, and a declaration takes a full turn to bite", () => {
+    let state = frontline(1, 9, 3, 1);
+    state.war = NATIONS.map(() => 0);
+    const attack = move(home, front, 9);
+    assert.deepEqual(sanitizeOrders(map, state, 1, attack).moves, []);
+
+    const declare = sanitizeOrders(map, state, 1, { ...emptyOrders(), declare: 3 });
+    assert.equal(declare.declare, 3);
+    const first = resolveTurn(map, state, ordersFor({ 1: declare }));
+    assert.ok(first.events.diplomacy.some((d) => d.kind === "declare" && d.a === 1 && d.b === 3));
+    state = first.state;
+    assert.equal(atWar(state, 1, 3), false);
+    assert.equal(warPending(state, 3, 1), true);
+    assert.deepEqual(sanitizeOrders(map, state, 1, attack).moves, []);
+
+    state = resolveTurn(map, state, ordersFor({})).state;
+    assert.equal(atWar(state, 3, 1), true);
+    assert.equal(sanitizeOrders(map, state, 1, attack).moves.length, 1);
+  });
+
+  test("allies are dragged into each other's wars", () => {
+    let state = blankState();
+    state.war = NATIONS.map(() => 0);
+    state.faction = NATIONS.map((n) => (n === 1 || n === 2 ? 1 : NEUTRAL));
+    state = resolveTurn(map, state, ordersFor({ 3: { ...emptyOrders(), declare: 1 } })).state;
+    state = resolveTurn(map, state, ordersFor({})).state;
+    assert.equal(atWar(state, 3, 1), true);
+    assert.equal(atWar(state, 3, 2), true);
+    assert.equal(atWar(state, 1, 2), false);
   });
 });

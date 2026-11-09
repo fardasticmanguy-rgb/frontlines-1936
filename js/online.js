@@ -1,3 +1,4 @@
+import { isEuropean } from "./scenarios/europe.js";
 import { planAiOrders } from "./ai.js";
 import { nationCountFor, rosterFor } from "./setup.js";
 import { DEFAULT_TURNS, NATIONS, NATION_NAMES, TRAITS } from "./config.js";
@@ -415,7 +416,7 @@ const encodeMapOptions = (net) => `${net.scenario}:${net.nations}:${net.size}`;
 function decodeMapOptions(text) {
   const [scenario, nations, size] = String(text || "").split(":");
   return {
-    scenario: scenario === "europe" ? "europe" : "random",
+    scenario: isEuropean(scenario) ? scenario : "random",
     nations: Number(nations) || 4,
     size: size || "medium",
   };
@@ -427,8 +428,8 @@ export function syncOptionButtons() {
   const net = store.net;
   if (!net) return;
   const hosting = net.role === "host";
-  $("option-nations").hidden = !hosting || net.scenario === "europe";
-  $("option-size").hidden = !hosting || net.scenario === "europe";
+  $("option-nations").hidden = !hosting || isEuropean(net.scenario);
+  $("option-size").hidden = !hosting || isEuropean(net.scenario);
   for (const [row, key] of [
     ["option-timer", "timer"],
     ["option-length", "maxTurns"],
@@ -448,7 +449,7 @@ export function setLobbyOption(key, value) {
   const net = store.net;
   if (!net || net.role !== "host") return;
   if (key === "visibility") net.visibility = value === "public" ? "public" : "private";
-  else if (key === "scenario") net.scenario = value === "europe" ? "europe" : "random";
+  else if (key === "scenario") net.scenario = isEuropean(value) ? value : "random";
   else if (key === "size" || key === "difficulty") net[key] = value;
   else net[key] = Number(value);
   syncOptionButtons();

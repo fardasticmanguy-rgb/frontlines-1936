@@ -8,6 +8,8 @@ A four-player grand strategy game for tablets, inspired by Hearts of Iron. Every
 
 - **Play on this device**: pick the map, 2 to 8 nations, map size, AI difficulty, war length, winter and world events
 - **Pass-and-play**: mark several nations as players and hand the device around; plans stay secret behind a handoff screen
+- **Europe 1936**: March 1936, Austria, Czechoslovakia and Albania still independent, no wars yet
+- **Declaring war**: nations start at peace; a declaration gives one turn of warning before fighting starts, and allies join in
 - **Europe 1939**: 313 states built from real regional borders (Natural Earth, public domain), September 1939 frontiers, real coastlines from Narvik to Cairo and Baku, sea crossings, Germany, Britain, France, USSR, Italy, Poland, Spain and Turkey, neutral minors, and the Axis and Allies already formed
 - **Random continents**: procedurally generated Voronoi maps from a shared seed, small to large
 - Simultaneous turns with deterministic combat: no dice, terrain and forts multiply defense
