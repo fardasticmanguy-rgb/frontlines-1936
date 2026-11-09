@@ -13,20 +13,63 @@ export const EUROPE_ROSTER = [
 ];
 
 const OWNERS = { GER: 0, UK: 1, FRA: 2, SOV: 3, ITA: 4, POL: 5, SPA: 6, TUR: 7 };
-const STARTING_KIT = [
-  [8, 6],
-  [1, 3],
-  [3, 6],
-  [6, 6],
-  [1, 3],
-  [1, 3],
-  [0, 2],
-  [0, 2],
-];
-const FIRST_TURN = 43;
+const ERAS = {
+  1939: {
+    firstTurn: 43,
+    factions: [0, 1, 1, NEUTRAL, 0, 1, NEUTRAL, NEUTRAL],
+    wars: [
+      [0, 1],
+      [0, 2],
+      [0, 5],
+    ],
+    kit: [
+      [8, 6],
+      [1, 3],
+      [3, 6],
+      [6, 6],
+      [1, 3],
+      [1, 3],
+      [0, 2],
+      [0, 2],
+    ],
+    industry: [10, 12, 12, 12, 8, 8, 6, 6],
+    owners: {},
+  },
+  1936: {
+    firstTurn: 1,
+    factions: [NEUTRAL, 1, 1, NEUTRAL, NEUTRAL, NEUTRAL, NEUTRAL, NEUTRAL],
+    wars: [],
+    kit: [
+      [3, 4],
+      [1, 2],
+      [2, 5],
+      [4, 5],
+      [1, 3],
+      [0, 2],
+      [0, 1],
+      [0, 1],
+    ],
+    industry: [8, 10, 10, 10, 7, 6, 5, 5],
+    owners: {
+      Vienna: "Austria",
+      Linz: "Austria",
+      Innsbruck: "Austria",
+      Graz: "Austria",
+      Prague: "Czechoslovakia",
+      Pilsen: "Czechoslovakia",
+      Brno: "Czechoslovakia",
+      Bratislava: "Czechoslovakia",
+      Žilina: "Czechoslovakia",
+      "Banská Bystrica": "Czechoslovakia",
+      Prešov: "Czechoslovakia",
+      Košice: "Czechoslovakia",
+      Ungvár: "Czechoslovakia",
+      Tirana: "Albania",
+      Memel: "Lithuania",
+    },
+  },
+};
 const GARRISON_BONUS = { FRA: 1, POL: 1, UK: 1 };
-const INDUSTRY = [10, 12, 12, 12, 8, 8, 6, 6];
-const FACTIONS = [0, 1, 1, NEUTRAL, 0, 1, NEUTRAL, NEUTRAL];
 const FACTION_NAMES = {
   0: { name: "AXIS", core: [0, 4] },
   1: { name: "ALLIES", core: [1, 2] },
@@ -114,12 +157,14 @@ function garrison(owner, terrain, flags) {
   return (neutral ? [4, 5, 6][terrain] : [2, 3, 3][terrain]) + bonus;
 }
 
-let cached = null;
+const cached = {};
 
-function buildEurope() {
+function buildEurope(year) {
+  const era = ERAS[year];
   const landCount = EUROPE_PROVINCES.length;
   const seaId = landCount;
-  const provinces = EUROPE_PROVINCES.map(([name, owner, terrain, flagText, x, y, rings, holes], id) => {
+  const provinces = EUROPE_PROVINCES.map(([name, realOwner, terrain, flagText, x, y, rings, holes], id) => {
+    const owner = era.owners[name] ?? realOwner;
     const flags = flagText.split(" ").filter(Boolean);
     const decoded = rings.map(decodeRing);
     return {
@@ -174,8 +219,9 @@ function buildEurope() {
     troops: new Array(count).fill(0),
     forts: new Array(count).fill(0),
     factories: new Array(count).fill(0),
-    industry: NATIONS.map((n) => INDUSTRY[n] ?? 0),
-    faction: NATIONS.map((n) => FACTIONS[n] ?? NEUTRAL),
+    industry: NATIONS.map((n) => era.industry[n] ?? 0),
+    faction: NATIONS.map((n) => era.factions[n] ?? NEUTRAL),
+    war: NATIONS.map(() => 0),
     armor: new Array(count).fill(0),
     guns: new Array(count).fill(0),
   };
@@ -186,7 +232,11 @@ function buildEurope() {
     const factory = p.flags.find((f) => /^F\d$/.test(f));
     start.factories[p.id] = factory ? Number(factory[1]) : 0;
   }
-  STARTING_KIT.forEach(([tanks, guns], nation) => {
+  for (const [a, b] of era.wars) {
+    start.war[a] |= 1 << b;
+    start.war[b] |= 1 << a;
+  }
+  era.kit.forEach(([tanks, guns], nation) => {
     const strongest = provinces
       .slice(0, landCount)
       .filter((p) => start.owner[p.id] === nation)
@@ -206,12 +256,12 @@ function buildEurope() {
     provinces.findIndex((p) => p.capitalOf === n),
   );
   return {
-    seed: 1939,
-    options: { scenario: "europe" },
-    scenario: "europe",
+    seed: year,
+    options: { scenario: year === 1936 ? "europe1936" : "europe" },
+    scenario: year === 1936 ? "europe1936" : "europe",
     nationCount: EUROPE_ROSTER.length,
     roster: EUROPE_ROSTER,
-    firstTurn: FIRST_TURN,
+    firstTurn: era.firstTurn,
     factionNames: FACTION_NAMES,
     incomeScale: INCOME_SCALE,
     width: EUROPE_WIDTH,
@@ -223,13 +273,18 @@ function buildEurope() {
     capitals,
     start,
     bounds: bounds(provinces.slice(0, landCount)),
-    hash: 19390901 + landCount * 7 + edges.length,
+    hash: year * 10000 + 901 + landCount * 7 + edges.length,
     totalVictoryPoints: provinces.reduce((sum, p) => sum + (p.city ? (p.capitalOf >= 0 ? 3 : 1) : 0), 0),
   };
 }
 
-export function generateEurope(seed = 1939) {
+export function generateEurope(seed = 1939, scenario = "europe") {
   applyRoster(EUROPE_ROSTER);
-  if (!cached) cached = buildEurope();
-  return { ...cached, seed };
+  const year = scenario === "europe1936" ? 1936 : 1939;
+  cached[year] ??= buildEurope(year);
+  return { ...cached[year], seed };
+}
+
+export function isEuropean(scenario) {
+  return scenario === "europe" || scenario === "europe1936";
 }

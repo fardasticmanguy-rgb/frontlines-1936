@@ -26,7 +26,7 @@ export function cycleRotate() {
 }
 
 function rotationAllowed() {
-  if (viewSettings.rotate === "auto") return store.map?.scenario !== "europe";
+  if (viewSettings.rotate === "auto") return store.map?.scenario === "random" || !store.map?.scenario;
   return viewSettings.rotate === "on";
 }
 const MAX_LAYER_PIXELS = 7e6;

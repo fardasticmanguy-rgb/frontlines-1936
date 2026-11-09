@@ -43,6 +43,9 @@ import {
   armorOf,
   ordersCost,
   areAllied,
+  atWar as atWarWith,
+  canEnter,
+  warPending,
   flankBonus,
   attackStrength,
   blocOf,
@@ -207,6 +210,8 @@ function pactClass(game, nation) {
   const { state, me } = game;
   if (me < 0 || nation === me || !state.alive[nation]) return "";
   if (areAllied(state, me, nation)) return "allied";
+  if (atWarWith(state, me, nation)) return "war";
+  if (warPending(state, me, nation)) return "war pending";
   if (state.offers[nation] === me && !areAllied(state, me, nation)) return "courting";
   return "";
 }
@@ -256,7 +261,7 @@ export function renderTopBar() {
     .map(
       (n) => `
       <div class="nation ${me === n ? "me" : ""} ${state.alive[n] ? "" : "dead"} ${game.selectedNation === n ? "picked" : ""} ${pactClass(game, n)}" data-nation="${n}">
-        <img src="${flagUrls[n]}" alt="">${nationBadge(game, n)}
+        <img src="${flagUrls[n]}" alt="">${nationBadge(game, n)}${me >= 0 && n !== me && atWarWith(state, me, n) ? '<span class="war-tag">⚔</span>' : me >= 0 && n !== me && warPending(state, me, n) ? '<span class="war-tag soon">⏳</span>' : ""}
         <span>★${victoryPoints(map, state, n)}</span>
       </div>`,
     )
@@ -307,7 +312,7 @@ function idleMessage(game) {
   }
   if (winterActive(state))
     return "❄ Winter: attacks are 20% weaker. A good month to dig in, train and build.";
-  return "Drag or right-click to attack and redeploy. Shift-drag to box-select, Ctrl-click to add provinces, Z to undo, P for production.";
+  return "Tap a flag to declare war (it starts the turn after). Drag or right-click to attack and redeploy. Shift-drag to box-select, Ctrl-click to add provinces, Z to undo, P for production.";
 }
 
 function traitLine(nation) {
@@ -543,7 +548,7 @@ function frontDistance(map, state, me) {
     if (!p.land || state.owner[p.id] !== me) continue;
     if (
       p.neighbors.some(
-        (n) => provinces[n].land && state.owner[n] !== me && !areAllied(state, me, state.owner[n]),
+        (n) => provinces[n].land && state.owner[n] !== me && canEnter(state, me, state.owner[n]),
       )
     ) {
       distance[p.id] = 0;
@@ -640,7 +645,7 @@ function relationOf(game, map, nation) {
           danger: true,
         };
   }
-  const atWar = '<span class="bad">At war</span>';
+  const atWar = warStatus(state, me, nation);
   if (mine >= 0 && theirs >= 0) return { text: `${atWar} · member of the ${theirName}` };
   const standing = plan && plan.offer !== KEEP_OFFER ? plan.offer : state.offers[me];
   if (standing === nation) {
@@ -658,6 +663,27 @@ function relationOf(game, map, nation) {
     theirs >= 0 ? `ASK TO JOIN THE ${theirName}` : mine >= 0 ? `INVITE TO THE ${myName}` : "OFFER ALLIANCE";
   const text = theirs >= 0 ? `${atWar} · member of the ${theirName}` : atWar;
   return { text, action: "diplo-offer", label };
+}
+
+function warStatus(state, me, nation) {
+  if (atWarWith(state, me, nation)) return '<span class="bad">⚔ At war</span>';
+  if (warPending(state, me, nation)) return '<span class="bad">⏳ War begins next turn</span>';
+  return '<span class="good">☮ At peace</span>';
+}
+
+function warRow(game, nation) {
+  const { state, me } = game;
+  if (!canPlan() || nation === me || me < 0 || !state.alive[nation] || areAllied(state, me, nation))
+    return "";
+  if (atWarWith(state, me, nation) || warPending(state, me, nation)) return "";
+  if (game.orders[me].declare === nation) {
+    return `
+    <div class="row"><span class="bad">⚔ Declaration queued for this turn</span>
+      <button data-action="declare-cancel" data-id="${nation}">CANCEL</button></div>`;
+  }
+  return `
+    <div class="row"><button class="danger" data-action="declare-war" data-id="${nation}">⚔ DECLARE WAR</button>
+      <span class="muted">They get one turn of warning. Fighting starts the turn after. Allies on both sides join in.</span></div>`;
 }
 
 function aidRow(game, nation) {
@@ -686,8 +712,8 @@ function diplomacyPanel(game, map, nation) {
       ? `<div class="row"><button class="${relation.danger ? "danger" : "go"}" data-action="${relation.action}" data-id="${nation}">${relation.label}</button></div>
          <div class="row muted">Pacts form once both sides have offered. Factions share supply, fight together and win together (${goals}).</div>`
       : "";
-  const actions =
-    button || aidRow(game, nation) ? `<div class="actions">${button}${aidRow(game, nation)}</div>` : "";
+  const extra = warRow(game, nation) + aidRow(game, nation);
+  const actions = button || extra ? `<div class="actions">${button}${extra}</div>` : "";
   return `
     <div class="info">
       <div class="info-head">${flagImage(nation)}

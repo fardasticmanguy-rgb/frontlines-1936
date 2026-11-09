@@ -2,7 +2,7 @@ import { DEFAULT_TURNS, NATIONS, NEUTRAL } from "./config.js";
 import { DEFAULT_RULES, KEEP_OFFER, MAX_FACTORY_LEVEL, WORLD_EVENTS, emptyOrders } from "./rules.js";
 
 const UNOWNED = 9;
-const DIPLOMACY_KINDS = ["offer", "form", "join", "leave", "aid"];
+const DIPLOMACY_KINDS = ["offer", "form", "join", "leave", "aid", "declare"];
 
 const numbers = (text) => text.split(",").map(Number);
 
@@ -26,6 +26,8 @@ export function encodeState(state, { deadline = -1, ready = [], absent = [] } = 
       state.faction[n] ?? NEUTRAL,
       state.offers[n] ?? NEUTRAL,
       state.bonus?.[n] ?? 0,
+      state.war?.[n] ?? 255,
+      state.pending?.[n] ?? 0,
     ].join(","),
   ).join(";");
   const provinces = state.owner
@@ -90,13 +92,17 @@ export function decodeState(text, provinceCount) {
     faction: [],
     offers: [],
     bonus: [],
+    war: [],
+    pending: [],
     rules: { winter: winter === 0 ? 0 : 1, events: worldEvents === 0 ? 0 : 1 },
   };
   const ready = [];
   const absent = [];
 
   parts[1].split(";").forEach((row, n) => {
-    const [industry, alive, isReady, isAbsent, faction, offer, bonus] = numbers(row);
+    const [industry, alive, isReady, isAbsent, faction, offer, bonus, war, pending] = numbers(row);
+    state.war[n] = Number.isInteger(war) ? war & 255 : 255;
+    state.pending[n] = Number.isInteger(pending) ? pending & 255 : 0;
     state.industry[n] = industry || 0;
     state.alive[n] = alive ? 1 : 0;
     ready[n] = isReady ? 1 : 0;
@@ -189,6 +195,7 @@ export function encodeOrders(orders) {
     orders.breakAlliance ? 1 : 0,
     orders.aidTo ?? NEUTRAL,
     orders.aidAmount || 0,
+    orders.declare ?? NEUTRAL,
   ].join(":");
   const tanks = Object.keys(orders.tanks ?? {})
     .map((id) => `${id}:${orders.tanks[id]}`)
@@ -220,7 +227,8 @@ export function decodeOrders(text) {
   for (const v of rows(artillery)) if (v.length === 2) orders.artillery[v[0]] = v[1];
   for (const v of rows(recruits)) if (v.length === 2) orders.recruits[v[0]] = v[1];
   for (const v of rows(builds)) if (v.length === 2) orders.builds[v[0]] = v[1];
-  const [offer, breakAlliance, aidTo, aidAmount] = (diplomacy || "").split(":").map(Number);
+  const [offer, breakAlliance, aidTo, aidAmount, declare] = (diplomacy || "").split(":").map(Number);
+  if (Number.isInteger(declare)) orders.declare = declare;
   if (Number.isInteger(offer)) orders.offer = offer;
   orders.breakAlliance = breakAlliance === 1 ? 1 : 0;
   if (Number.isInteger(aidTo) && Number.isInteger(aidAmount)) {
