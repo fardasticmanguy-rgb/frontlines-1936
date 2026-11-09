@@ -33,9 +33,44 @@ test("maps have one connected landmass with four separate capitals", () => {
   }
 });
 
+test("random maps support two to eight nations at every size", () => {
+  for (const size of ["small", "medium", "large"]) {
+    for (const nations of [2, 3, 5, 8]) {
+      const map = generateMap(31, { nations, size });
+      assert.equal(map.nationCount, nations);
+      assert.equal(new Set(map.capitals).size, nations);
+      assert.ok(map.capitals.every((c) => map.provinces[c].land));
+    }
+  }
+});
+
 test("neighbor links are symmetric", () => {
   const map = generateMap(99);
   for (const p of map.provinces) {
     for (const n of p.neighbors) assert.ok(map.provinces[n].neighbors.includes(p.id));
   }
+});
+
+test("the Europe 1939 map is one connected continent with real powers", () => {
+  const map = generateMap(1, { scenario: "europe" });
+  const land = map.provinces.filter((p) => p.land);
+  assert.ok(land.length > 150);
+  const seen = new Set([land[0].id]);
+  const queue = [land[0].id];
+  while (queue.length) {
+    for (const n of map.provinces[queue.pop()].neighbors) {
+      if (map.provinces[n].land && !seen.has(n)) {
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+  }
+  assert.equal(seen.size, land.length);
+  const byName = (name) => map.provinces.find((p) => p.name === name);
+  assert.equal(byName("Berlin").capitalOf, 0);
+  assert.equal(byName("London").capitalOf, 1);
+  assert.ok(byName("London").neighbors.includes(byName("Calais").id));
+  assert.ok(!byName("Copenhagen").neighbors.includes(byName("Berlin").id));
+  assert.equal(map.capitals.length, 8);
+  assert.ok(map.capitals.every((c) => c >= 0));
 });

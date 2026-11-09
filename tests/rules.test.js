@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { planAiOrders } from "../js/ai.js";
-import { BUILDING, NATIONS, NEUTRAL, SUPPLY_DEFENSE, isWinter } from "../js/config.js";
+import { BUILDING, NATIONS, NEUTRAL, SUPPLY_DEFENSE, dateOf, isWinter } from "../js/config.js";
 import { generateMap } from "../js/map.js";
 import {
   WORLD_EVENTS,
-  allianceGoal,
+  areAllied,
+  attackMultiplier,
+  relativeTurn,
+  warLength,
   buildCost,
   fortBonus,
   createInitialState,
@@ -44,7 +47,7 @@ function blankState() {
   state.forts.fill(0);
   state.factories.fill(0);
   state.industry = NATIONS.map(() => 50);
-  for (const n of NATIONS) {
+  for (const n of NATIONS.slice(0, map.nationCount)) {
     state.owner[map.capitals[n]] = n;
     state.troops[map.capitals[n]] = 1;
   }
@@ -152,6 +155,27 @@ describe("resolveTurn", () => {
     assert.equal(next.troops[map.capitals[1]], 1);
   });
 
+  test("winter can be switched off and world events disabled", () => {
+    const frozen = frontline(1, 10, 3, 9);
+    frozen.turn = 10;
+    frozen.rules = { winter: 0, events: 0 };
+    const { state: next } = resolveTurn(map, frozen, ordersFor({ 1: move(home, front, 10) }));
+    assert.equal(next.owner[front], 1);
+    let quiet = createInitialState(map, 18, { winter: 1, events: 0 });
+    for (let t = 0; t < 12; t++) {
+      const result = resolveTurn(map, quiet, ordersFor({}));
+      assert.equal(result.events.world, null);
+      quiet = result.state;
+    }
+  });
+
+  test("winter-hardened nations ignore the winter penalty", () => {
+    const state = blankState();
+    state.turn = 10;
+    assert.equal(attackMultiplier(state, 4), 1);
+    assert.equal(attackMultiplier(state, 1), 0.8);
+  });
+
   test("national traits change construction costs", () => {
     assert.equal(buildCost(1, BUILDING.FACTORY), 6);
     assert.equal(buildCost(0, BUILDING.FACTORY), 8);
@@ -164,18 +188,19 @@ describe("resolveTurn", () => {
 
 describe("alliances", () => {
   const offer = (target) => ({ ...emptyOrders(), offer: target });
-  const allied = (state) => Object.assign(state, { allies: [-1, 3, -1, 1], offers: [-1, -1, -1, -1] });
+  const none = () => NATIONS.map(() => -1);
+  const allied = (state) => Object.assign(state, { faction: [-1, 1, -1, 1, -1, -1, -1, -1], offers: none() });
 
   test("an alliance forms once both sides have offered it", () => {
     let state = blankState();
     let result = resolveTurn(map, state, ordersFor({ 1: offer(3) }));
-    assert.deepEqual(result.state.allies, [-1, -1, -1, -1]);
+    assert.deepEqual(result.state.faction, none());
     assert.equal(result.state.offers[1], 3);
-    assert.deepEqual(result.events.diplomacy, [{ kind: "offer", a: 1, b: 3 }]);
+    assert.deepEqual(result.events.diplomacy, [{ kind: "offer", a: 1, b: 3, amount: 0 }]);
     result = resolveTurn(map, result.state, ordersFor({ 3: offer(1) }));
-    assert.deepEqual(result.state.allies, [-1, 3, -1, 1]);
-    assert.deepEqual(result.state.offers, [-1, -1, -1, -1]);
-    assert.ok(result.events.diplomacy.some((d) => d.kind === "alliance"));
+    assert.deepEqual(result.state.faction, [-1, 1, -1, 1, -1, -1, -1, -1]);
+    assert.deepEqual(result.state.offers, none());
+    assert.ok(result.events.diplomacy.some((d) => d.kind === "form"));
   });
 
   test("allies cannot attack each other", () => {
@@ -232,16 +257,37 @@ describe("alliances", () => {
       state,
       ordersFor({ 3: { ...emptyOrders(), breakAlliance: 1 } }),
     );
-    assert.deepEqual(next.allies, [-1, -1, -1, -1]);
-    assert.deepEqual(events.diplomacy, [{ kind: "break", a: 3, b: 1 }]);
+    assert.deepEqual(next.faction, none());
+    assert.deepEqual(events.diplomacy, [{ kind: "leave", a: 3, b: 1, amount: 0 }]);
+  });
+
+  test("factions grow by invitation up to their size cap", () => {
+    const big = generateMap(4242, { nations: 6 });
+    let state = createInitialState(big);
+    state.faction = [0, 0, -1, -1, -1, -1, -1, -1];
+    const orders = (entries) => NATIONS.map((n) => entries[n] || emptyOrders());
+    state = resolveTurn(big, state, orders({ 2: offer(1), 1: offer(2) })).state;
+    assert.deepEqual(state.faction.slice(0, 4), [0, 0, 0, -1]);
+    state = resolveTurn(big, state, orders({ 3: offer(0), 0: offer(3) })).state;
+    assert.equal(state.faction[3], -1);
+  });
+
+  test("aid moves industry from one nation to another", () => {
+    const state = blankState();
+    const gift = sanitizeOrders(map, state, 0, { ...emptyOrders(), aidTo: 2, aidAmount: 7 });
+    const { state: next, events } = resolveTurn(map, state, ordersFor({ 0: gift }));
+    assert.equal(next.industry[0], 50 - 7 + income(map, next, 0));
+    assert.equal(next.industry[2], 50 + 7 + income(map, next, 2));
+    assert.deepEqual(events.diplomacy[0], { kind: "aid", a: 0, b: 2, amount: 7 });
+    assert.equal(sanitizeOrders(map, state, 0, { ...emptyOrders(), aidTo: 0, aidAmount: 5 }).aidTo, -1);
   });
 
   test("an alliance wins together but needs a bigger share", () => {
-    assert.ok(allianceGoal(map) > victoryGoal(map));
+    assert.ok(victoryGoal(map, 2) > victoryGoal(map));
     const state = blankState();
     let points = 6;
     for (const p of provinces) {
-      if (!p.city || p.capitalOf >= 0 || points >= allianceGoal(map)) continue;
+      if (!p.city || p.capitalOf >= 0 || points >= victoryGoal(map, 2)) continue;
       state.owner[p.id] = points % 2 ? 1 : 3;
       points++;
     }
@@ -250,6 +296,29 @@ describe("alliances", () => {
     assert.equal(resolveTurn(map, state, ordersFor({})).state.winner, -1);
     const { state: next } = resolveTurn(map, allied(state), ordersFor({}));
     assert.ok([1, 3].includes(next.winner));
+  });
+});
+
+describe("scenarios", () => {
+  test("Europe starts in September 1939 with the historical factions", () => {
+    const europe = generateMap(1, { scenario: "europe" });
+    const state = createInitialState(europe, 18);
+    assert.equal(dateOf(state.turn), "SEP 1939");
+    assert.equal(relativeTurn(state), 1);
+    assert.equal(warLength(state), 18);
+    assert.deepEqual(state.faction, [0, 1, 1, -1, 0, 1, -1, -1]);
+    assert.ok(areAllied(state, 0, 4) && areAllied(state, 1, 2) && !areAllied(state, 0, 1));
+    const orders = NATIONS.map((n) => sanitizeOrders(europe, state, n, planAiOrders(europe, state, n)));
+    const next = resolveTurn(europe, state, orders).state;
+    assert.equal(dateOf(next.turn), "OCT 1939");
+    assert.ok(next.troops.every((t) => Number.isInteger(t) && t >= 0));
+  });
+
+  test("difficulty bonuses scale income", () => {
+    const state = blankState();
+    const base = income(map, state, 0);
+    state.bonus[0] = 40;
+    assert.equal(income(map, state, 0), Math.floor(base * 1.4));
   });
 });
 

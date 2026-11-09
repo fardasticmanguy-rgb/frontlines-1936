@@ -17,8 +17,6 @@ import { createRng } from "./random.js";
 
 const CAPITAL_GARRISON = 8;
 const BORDERLAND_GARRISON = 3;
-const VICTORY_SHARE = 0.6;
-const ALLIANCE_SHARE = 0.75;
 const MAX_RECRUITS = 99;
 const FACTORY_COSTS = [8, 12, 16];
 export const MAX_FACTORY_LEVEL = 3;
@@ -31,30 +29,50 @@ const EVENT_CHANCE = 0.5;
 export const WORLD_EVENTS = ["volunteers", "boom", "strikes", "partisans", "harvest"];
 
 const supplyCache = new WeakMap();
+const BLOC_SHARES = [0.6, 0.75, 0.85, 0.9];
+const ROUGH_BONUS = 0.25;
+const MAX_AID = 50;
 
 export const KEEP_OFFER = -2;
+export const DEFAULT_RULES = Object.freeze({ winter: 1, events: 1 });
 
 export function emptyOrders() {
-  return { moves: [], recruits: {}, builds: {}, offer: KEEP_OFFER, breakAlliance: 0 };
+  return {
+    moves: [],
+    recruits: {},
+    builds: {},
+    offer: KEEP_OFFER,
+    breakAlliance: 0,
+    aidTo: NEUTRAL,
+    aidAmount: 0,
+  };
 }
 
-const NO_ALLIES = Object.freeze([NEUTRAL, NEUTRAL, NEUTRAL, NEUTRAL]);
-
-export function allyOf(state, nation) {
-  return nation >= 0 ? ((state.allies ?? NO_ALLIES)[nation] ?? NEUTRAL) : NEUTRAL;
+export function factionOf(state, nation) {
+  return nation >= 0 ? (state.faction?.[nation] ?? NEUTRAL) : NEUTRAL;
 }
 
 export function areAllied(state, a, b) {
-  return a >= 0 && b >= 0 && a !== b && allyOf(state, a) === b;
+  return (
+    a >= 0 && b >= 0 && a !== b && factionOf(state, a) >= 0 && factionOf(state, a) === factionOf(state, b)
+  );
 }
 
 export function isHostile(state, nation, other) {
   return other !== nation && !areAllied(state, nation, other);
 }
 
+export function factionMembers(state, id) {
+  return id < 0 ? [] : NATIONS.filter((n) => state.alive[n] && state.faction[n] === id);
+}
+
+export function alliesOf(state, nation) {
+  return factionMembers(state, factionOf(state, nation)).filter((n) => n !== nation);
+}
+
 export function blocOf(state, nation) {
-  const ally = allyOf(state, nation);
-  return ally >= 0 && state.alive[ally] ? [nation, ally].sort((a, b) => a - b) : [nation];
+  const members = factionMembers(state, factionOf(state, nation));
+  return members.length > 1 ? members : [nation];
 }
 
 export function blocs(state) {
@@ -69,21 +87,48 @@ export function blocs(state) {
   return result;
 }
 
-export function createInitialState(map, maxTurns = DEFAULT_TURNS) {
+export function factionCap(map) {
+  return Math.max(2, Math.floor(map.nationCount / 2));
+}
+
+export function relativeTurn(state) {
+  return state.turn - (state.firstTurn ?? 1) + 1;
+}
+
+export function warLength(state) {
+  return state.maxTurns - (state.firstTurn ?? 1) + 1;
+}
+
+export function winterActive(state) {
+  return Boolean((state.rules ?? DEFAULT_RULES).winter) && isWinter(state.turn);
+}
+
+export function createInitialState(map, length = DEFAULT_TURNS, rules = DEFAULT_RULES) {
   const count = map.provinces.length;
+  const firstTurn = map.firstTurn ?? 1;
   const state = {
-    turn: 1,
-    maxTurns,
+    turn: firstTurn,
+    firstTurn,
+    maxTurns: firstTurn + length - 1,
     winner: -1,
     owner: new Array(count).fill(NEUTRAL),
     troops: new Array(count).fill(0),
     forts: new Array(count).fill(0),
     factories: new Array(count).fill(0),
-    industry: NATIONS.map(() => STARTING_INDUSTRY),
-    alive: NATIONS.map(() => 1),
-    allies: NATIONS.map(() => NEUTRAL),
+    industry: NATIONS.map((n) => (n < map.nationCount ? STARTING_INDUSTRY : 0)),
+    alive: NATIONS.map((n) => (n < map.nationCount ? 1 : 0)),
+    faction: NATIONS.map(() => NEUTRAL),
     offers: NATIONS.map(() => NEUTRAL),
+    rules: { winter: rules.winter ? 1 : 0, events: rules.events ? 1 : 0 },
+    bonus: NATIONS.map(() => 0),
   };
+
+  if (map.start) {
+    for (const key of ["owner", "troops", "forts", "factories", "industry", "faction"]) {
+      state[key] = map.start[key].slice();
+    }
+    return state;
+  }
 
   const rng = createRng(map.seed ^ 0x5bd1e995);
   for (const p of map.provinces) {
@@ -91,7 +136,7 @@ export function createInitialState(map, maxTurns = DEFAULT_TURNS) {
     state.troops[p.id] = p.city ? 4 : [1 + Math.floor(rng() * 2), 2, 3][p.terrain];
   }
 
-  for (const nation of NATIONS) {
+  for (const nation of NATIONS.slice(0, map.nationCount)) {
     const capital = map.capitals[nation];
     state.owner[capital] = nation;
     state.troops[capital] = CAPITAL_GARRISON;
@@ -129,18 +174,19 @@ export function fortBonus(nation) {
   return hasTrait(nation, "fortress") ? FORTRESS_FORT_BONUS : FORT_BONUS;
 }
 
-export function attackMultiplier(nation, turn) {
-  return (hasTrait(nation, "blitz") ? BLITZ_ATTACK : 1) * (isWinter(turn) ? WINTER_ATTACK : 1);
+export function attackMultiplier(state, nation) {
+  const cold = winterActive(state) && !hasTrait(nation, "winter");
+  return (hasTrait(nation, "blitz") ? BLITZ_ATTACK : 1) * (cold ? WINTER_ATTACK : 1);
 }
 
-export function attackStrength(nation, count, turn) {
-  return count * attackMultiplier(nation, turn);
+export function attackStrength(state, nation, count) {
+  return count * attackMultiplier(state, nation);
 }
 
 export function supplyNetwork(map, state) {
   const owner = state.owner;
-  const allies = state.allies ?? NO_ALLIES;
-  const key = `${owner.join(",")}|${allies.join(",")}`;
+  const faction = state.faction ?? NATIONS.map(() => NEUTRAL);
+  const key = `${owner.join(",")}|${faction.join(",")}`;
   const cached = supplyCache.get(owner);
   if (cached && cached.key === key) return cached.supplied;
 
@@ -149,8 +195,9 @@ export function supplyNetwork(map, state) {
   for (const p of provinces) if (owner[p.id] === NEUTRAL || !p.land) supplied[p.id] = 1;
 
   for (const nation of NATIONS) {
-    const ally = allies[nation];
-    const passable = (id) => owner[id] === nation || (ally >= 0 && owner[id] === ally);
+    const side = faction[nation];
+    const passable = (id) =>
+      owner[id] === nation || (side >= 0 && owner[id] >= 0 && faction[owner[id]] === side);
     const visited = new Uint8Array(provinces.length);
     const queue = [];
     for (const p of provinces) {
@@ -185,7 +232,8 @@ export function defenseMultiplier(map, state, id) {
     TERRAIN_DEFENSE[p.terrain] +
     (state.forts[id] ? fortBonus(holder) : 0) +
     (p.capitalOf >= 0 ? CAPITAL_BONUS : 0) +
-    (p.city && hasTrait(holder, "fortress") ? FORTRESS_CITY_BONUS : 0);
+    (p.city && hasTrait(holder, "fortress") ? FORTRESS_CITY_BONUS : 0) +
+    (p.terrain > 0 && hasTrait(holder, "rough") ? ROUGH_BONUS : 0);
   return holder !== NEUTRAL && !isSupplied(map, state, id) ? base * SUPPLY_DEFENSE : base;
 }
 
@@ -205,7 +253,8 @@ export function income(map, state, nation) {
     else if (p.city) cities++;
     factories += state.factories[p.id];
   }
-  return 2 + Math.floor(provinces / 2) + 2 * cities + 4 * capitals + FACTORY_OUTPUT * factories;
+  const total = 2 + Math.floor(provinces / 2) + 2 * cities + 4 * capitals + FACTORY_OUTPUT * factories;
+  return Math.floor(total * (map.incomeScale ?? 1) * (1 + (state.bonus?.[nation] ?? 0) / 100));
 }
 
 export function victoryPoints(map, state, nation) {
@@ -216,8 +265,8 @@ export function victoryPoints(map, state, nation) {
   return points;
 }
 
-export function victoryGoal(map) {
-  return Math.ceil(map.totalVictoryPoints * VICTORY_SHARE);
+export function victoryGoal(map, size = 1) {
+  return Math.ceil(map.totalVictoryPoints * BLOC_SHARES[Math.min(size, BLOC_SHARES.length) - 1]);
 }
 
 export function provinceCount(state, nation) {
@@ -236,7 +285,7 @@ export function ordersCost(orders, nation, state) {
   let cost = 0;
   for (const id in orders.recruits) cost += orders.recruits[id];
   for (const id in orders.builds) cost += buildCostAt(state, nation, id, orders.builds[id]);
-  return cost;
+  return cost + (orders.aidTo >= 0 ? orders.aidAmount || 0 : 0);
 }
 
 export function sanitizeOrders(map, state, nation, orders) {
@@ -282,7 +331,14 @@ export function sanitizeOrders(map, state, nation, orders) {
   const offer = Math.floor(Number(orders.offer ?? KEEP_OFFER));
   if (offer === NEUTRAL || offer === KEEP_OFFER) clean.offer = offer;
   else if (NATIONS.includes(offer) && offer !== nation && state.alive[offer]) clean.offer = offer;
-  clean.breakAlliance = orders.breakAlliance && allyOf(state, nation) >= 0 ? 1 : 0;
+  clean.breakAlliance = orders.breakAlliance && factionOf(state, nation) >= 0 ? 1 : 0;
+
+  const aidTo = Math.floor(Number(orders.aidTo ?? NEUTRAL));
+  const aidAmount = Math.min(Math.floor(Number(orders.aidAmount) || 0), budget, MAX_AID);
+  if (NATIONS.includes(aidTo) && aidTo !== nation && state.alive[aidTo] && aidAmount > 0) {
+    clean.aidTo = aidTo;
+    clean.aidAmount = aidAmount;
+  }
   return clean;
 }
 
@@ -292,13 +348,13 @@ function survivorsOf(count, strength, enemyStrength) {
   return Math.min(count, Math.max(1, Math.ceil((strength - enemyStrength) / perTroop - 1e-9)));
 }
 
-function settleHeadOnClashes(moves, turn) {
+function settleHeadOnClashes(moves, state) {
   for (const a of moves) {
     for (const b of moves) {
       if (a === b || a.nation === b.nation || a.count <= 0 || b.count <= 0) continue;
       if (a.from !== b.to || a.to !== b.from) continue;
-      const sa = attackStrength(a.nation, a.count, turn);
-      const sb = attackStrength(b.nation, b.count, turn);
+      const sa = attackStrength(state, a.nation, a.count);
+      const sb = attackStrength(state, b.nation, b.count);
       a.count = survivorsOf(a.count, sa, sb);
       b.count = survivorsOf(b.count, sb, sa);
       if (a.count === 0) a.stop = 0.5;
@@ -341,15 +397,11 @@ function fightBattles(map, state, moves, owner, troops) {
     for (const nation of NATIONS) {
       const count = incoming[id][nation] + (nation === holder ? troops[id] : 0);
       if (count <= 0) continue;
-      const strength = nation === holder ? count * multiplier : attackStrength(nation, count, state.turn);
-      join(
-        Math.min(nation, allyOf(state, nation) >= 0 ? allyOf(state, nation) : nation),
-        nation,
-        count,
-        strength,
-      );
+      const strength = nation === holder ? count * multiplier : attackStrength(state, nation, count);
+      const side = factionOf(state, nation);
+      join(side >= 0 ? `f${side}` : `n${nation}`, nation, count, strength);
     }
-    if (holder === NEUTRAL && troops[id] > 0) join(NEUTRAL, NEUTRAL, troops[id], troops[id] * multiplier);
+    if (holder === NEUTRAL && troops[id] > 0) join("neutral", NEUTRAL, troops[id], troops[id] * multiplier);
 
     const forces = [...sides.values()].map((side) => ({
       nation: side.holder ? holder : side.lead,
@@ -379,12 +431,8 @@ function fightBattles(map, state, moves, owner, troops) {
   return { battles, captures };
 }
 
-export function allianceGoal(map) {
-  return Math.ceil(map.totalVictoryPoints * ALLIANCE_SHARE);
-}
-
 export function blocGoal(map, bloc) {
-  return bloc.length > 1 ? allianceGoal(map) : victoryGoal(map);
+  return victoryGoal(map, bloc.length);
 }
 
 export function blocPoints(map, state, bloc) {
@@ -413,22 +461,24 @@ function decideWinner(map, next) {
   return -1;
 }
 
-function resolveDiplomacy(state, next, ordersByNation) {
-  const allies = state.allies.slice();
+function freeFactionId(faction, preferred) {
+  if (!faction.includes(preferred)) return preferred;
+  return NATIONS.find((id) => !faction.includes(id));
+}
+
+function resolveDiplomacy(map, state, next, ordersByNation) {
+  const faction = state.faction.slice();
   const offers = state.offers.slice();
   const diplomacy = [];
+  const cap = factionCap(map);
+  const size = (id) => NATIONS.filter((n) => next.alive[n] && faction[n] === id).length;
 
   for (const nation of NATIONS) {
     const orders = ordersByNation[nation];
-    if (!orders || !state.alive[nation]) continue;
-    const ally = allies[nation];
-    if (orders.breakAlliance && ally >= 0) {
-      allies[nation] = NEUTRAL;
-      allies[ally] = NEUTRAL;
-      offers[nation] = NEUTRAL;
-      if (offers[ally] === nation) offers[ally] = NEUTRAL;
-      diplomacy.push({ kind: "break", a: nation, b: ally });
-    }
+    if (!orders || !state.alive[nation] || !orders.breakAlliance || faction[nation] < 0) continue;
+    diplomacy.push({ kind: "leave", a: nation, b: faction[nation], amount: 0 });
+    faction[nation] = NEUTRAL;
+    offers[nation] = NEUTRAL;
   }
   for (const nation of NATIONS) {
     const orders = ordersByNation[nation];
@@ -436,29 +486,49 @@ function resolveDiplomacy(state, next, ordersByNation) {
       continue;
     const previous = offers[nation];
     offers[nation] = orders.offer;
-    if (orders.offer >= 0 && orders.offer !== previous)
-      diplomacy.push({ kind: "offer", a: nation, b: orders.offer });
+    if (orders.offer >= 0 && orders.offer !== previous) {
+      diplomacy.push({ kind: "offer", a: nation, b: orders.offer, amount: 0 });
+    }
   }
   for (const nation of NATIONS) {
     if (next.alive[nation]) continue;
-    const ally = allies[nation];
-    if (ally >= 0) allies[ally] = NEUTRAL;
-    allies[nation] = NEUTRAL;
+    faction[nation] = NEUTRAL;
     offers[nation] = NEUTRAL;
   }
   for (const a of NATIONS) {
-    const b = offers[a];
-    if (b <= a || offers[b] !== a || allies[a] >= 0 || allies[b] >= 0) continue;
-    if (!next.alive[a] || !next.alive[b]) continue;
-    allies[a] = b;
-    allies[b] = a;
-    diplomacy.push({ kind: "alliance", a, b });
+    for (const b of NATIONS) {
+      if (b <= a || offers[a] !== b || offers[b] !== a || !next.alive[a] || !next.alive[b]) continue;
+      const fa = faction[a];
+      const fb = faction[b];
+      if (fa >= 0 && fb >= 0) continue;
+      if (fa < 0 && fb < 0) {
+        const id = freeFactionId(faction, a);
+        faction[a] = id;
+        faction[b] = id;
+        diplomacy.push({ kind: "form", a, b, amount: 0 });
+      } else {
+        const id = fa >= 0 ? fa : fb;
+        const joiner = fa >= 0 ? b : a;
+        if (size(id) >= cap) continue;
+        faction[joiner] = id;
+        diplomacy.push({ kind: "join", a: joiner, b: fa >= 0 ? a : b, amount: 0 });
+      }
+      offers[a] = NEUTRAL;
+      offers[b] = NEUTRAL;
+    }
+  }
+  for (const id of NATIONS) {
+    const members = NATIONS.filter((n) => next.alive[n] && faction[n] === id);
+    if (members.length === 1) faction[members[0]] = NEUTRAL;
   }
   for (const n of NATIONS) {
     const target = offers[n];
-    if (target >= 0 && (allies[n] >= 0 || allies[target] >= 0 || !next.alive[target])) offers[n] = NEUTRAL;
+    if (target < 0) continue;
+    const together = faction[n] >= 0 && faction[n] === faction[target];
+    const bothTaken = faction[n] >= 0 && faction[target] >= 0;
+    if (together || bothTaken || !next.alive[target]) offers[n] = NEUTRAL;
   }
-  next.allies = allies;
+  next.faction = faction;
   next.offers = offers;
   return diplomacy;
 }
@@ -480,7 +550,7 @@ export function resolveTurn(map, state, ordersByNation) {
     }
   }
 
-  settleHeadOnClashes(moves, state.turn);
+  settleHeadOnClashes(moves, state);
   const { battles, captures } = fightBattles(map, state, moves, owner, troops);
   for (const c of captures) if (factories[c.province] > 0) factories[c.province]--;
 
@@ -502,13 +572,21 @@ export function resolveTurn(map, state, ordersByNation) {
     }
   }
 
+  const aid = [];
+  for (const nation of NATIONS) {
+    const orders = ordersByNation[nation];
+    if (!orders || !state.alive[nation] || !(orders.aidTo >= 0) || !(orders.aidAmount > 0)) continue;
+    industry[nation] -= orders.aidAmount;
+    aid.push({ kind: "aid", a: nation, b: orders.aidTo, amount: orders.aidAmount });
+  }
+
   for (const p of map.provinces) {
     const holder = owner[p.id];
     if (p.city && p.capitalOf < 0 && holder !== NEUTRAL && hasTrait(holder, "mobilization")) troops[p.id]++;
   }
 
   const attrition = [];
-  const supplied = supplyNetwork(map, { owner, allies: state.allies });
+  const supplied = supplyNetwork(map, { owner, faction: state.faction });
   for (const p of map.provinces) {
     if (!p.land || supplied[p.id] || troops[p.id] <= 0) continue;
     const lost = Math.max(1, Math.floor(troops[p.id] / 4));
@@ -518,6 +596,7 @@ export function resolveTurn(map, state, ordersByNation) {
 
   const next = {
     turn: state.turn + 1,
+    firstTurn: state.firstTurn ?? 1,
     maxTurns: state.maxTurns,
     winner: -1,
     owner,
@@ -526,8 +605,10 @@ export function resolveTurn(map, state, ordersByNation) {
     factories,
     industry,
     alive: NATIONS.map(() => 0),
-    allies: state.allies.slice(),
+    faction: state.faction.slice(),
     offers: state.offers.slice(),
+    rules: { ...(state.rules ?? DEFAULT_RULES) },
+    bonus: (state.bonus ?? NATIONS.map(() => 0)).slice(),
   };
   for (const nation of NATIONS) {
     next.alive[nation] = provinceCount(next, nation) > 0 ? 1 : 0;
@@ -535,7 +616,8 @@ export function resolveTurn(map, state, ordersByNation) {
       ? Math.max(0, next.industry[nation]) + income(map, next, nation)
       : 0;
   }
-  const diplomacy = resolveDiplomacy(state, next, ordersByNation);
+  for (const gift of aid) if (next.alive[gift.b]) next.industry[gift.b] += gift.amount;
+  const diplomacy = [...aid, ...resolveDiplomacy(map, state, next, ordersByNation)];
   const world = rollWorldEvent(map, next);
   next.winner = decideWinner(map, next);
 
@@ -565,7 +647,7 @@ function strongestNation(map, state, alive) {
 
 function rollWorldEvent(map, next) {
   const rng = createRng((map.seed ^ Math.imul(next.turn, 0x2c1b3c6d)) >>> 0);
-  if (next.turn < 3 || rng() > EVENT_CHANCE) return null;
+  if (!next.rules.events || relativeTurn(next) < 3 || rng() > EVENT_CHANCE) return null;
   const alive = NATIONS.filter((n) => next.alive[n]);
   if (alive.length < 2) return null;
 

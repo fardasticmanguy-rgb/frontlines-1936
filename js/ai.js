@@ -1,47 +1,76 @@
 import { BUILDING, NATIONS, NEUTRAL } from "./config.js";
 import {
   KEEP_OFFER,
-  allyOf,
   attackMultiplier,
+  blocOf,
   buildCostAt,
   canBuild,
   defenseMultiplier,
   divisionCount,
   emptyOrders,
+  factionCap,
+  factionMembers,
+  factionOf,
   factoryCount,
   isHostile,
   provinceCount,
+  relativeTurn,
   supplyNetwork,
   victoryPoints,
 } from "./rules.js";
 
+export const DIFFICULTIES = {
+  easy: { label: "EASY", margin: 2, attacks: 1, spend: 0.7, factories: -1, reserve: 0.8, bonus: -20 },
+  normal: { label: "NORMAL", margin: 0, attacks: Infinity, spend: 1, factories: 0, reserve: 0.5, bonus: 0 },
+  hard: { label: "HARD", margin: 0, attacks: Infinity, spend: 1, factories: 1, reserve: 0.4, bonus: 40 },
+};
+
 function planDiplomacy(map, state, nation) {
+  const plan = { offer: KEEP_OFFER, breakAlliance: 0 };
   const alive = NATIONS.filter((n) => state.alive[n]);
   const points = NATIONS.map((n) => victoryPoints(map, state, n));
   const power = (n) => points[n] * 3 + provinceCount(state, n) + divisionCount(state, n) * 0.25;
-  const blocPower = (n) => power(n) + (allyOf(state, n) >= 0 ? power(allyOf(state, n)) : 0);
-  const ally = allyOf(state, nation);
+  const blocPower = (n) => blocOf(state, n).reduce((sum, m) => sum + power(m), 0);
+  const cap = factionCap(map);
+  const roomIn = (n) => factionOf(state, n) < 0 || factionMembers(state, factionOf(state, n)).length < cap;
   const others = alive.filter((n) => n !== nation);
 
-  if (ally >= 0) {
-    const outsiders = others.filter((n) => n !== ally);
+  if (factionOf(state, nation) >= 0) {
+    const members = blocOf(state, nation);
+    const partners = members.filter((n) => n !== nation);
+    const outsiders = others.filter((n) => !members.includes(n));
     const rival = Math.max(0, ...outsiders.map(blocPower));
-    const runaway = power(ally) > power(nation) * 1.6 && power(ally) > rival;
-    const threatGone = rival < Math.max(power(nation), power(ally)) * 0.8;
+    const strongestPartner = Math.max(0, ...partners.map(power));
+    const runaway = strongestPartner > power(nation) * 1.6 && strongestPartner > rival;
+    const threatGone = rival < Math.max(...members.map(power)) * 0.8;
     const backstab =
       state.turn >= state.maxTurns && others.every((n) => points[nation] > points[n]) && outsiders.length > 0;
-    return { offer: KEEP_OFFER, breakAlliance: runaway || threatGone || backstab ? 1 : 0 };
+    if (runaway || threatGone || backstab) return { ...plan, breakAlliance: 1 };
+
+    const ours = members.reduce((sum, m) => sum + power(m), 0);
+    const requester = alive.find(
+      (n) => factionOf(state, n) < 0 && state.offers[n] === nation && power(n) <= rival * 1.3,
+    );
+    if (requester !== undefined && members.length < cap && ours + power(requester) <= rival * 2.2) {
+      plan.offer = requester;
+    }
+    const needy = partners.slice().sort((a, b) => power(a) - power(b) || a - b)[0];
+    if (needy !== undefined && state.industry[nation] >= 14 && power(needy) < power(nation) * 0.7) {
+      plan.aidTo = needy;
+      plan.aidAmount = Math.min(6, Math.floor(state.industry[nation] * 0.25));
+    }
+    return plan;
   }
 
   const strongest = Math.max(0, ...others.map(blocPower));
-  if (strongest < power(nation) * 1.25) return { offer: NEUTRAL, breakAlliance: 0 };
-
+  if (strongest < power(nation) * 1.25) return { ...plan, offer: NEUTRAL };
   const leader = others.slice().sort((a, b) => blocPower(b) - blocPower(a) || a - b)[0];
-  const free = others.filter((n) => allyOf(state, n) < 0 && n !== leader);
-  const suitor = free.find((n) => state.offers[n] === nation);
-  if (suitor !== undefined) return { offer: suitor, breakAlliance: 0 };
-  const partner = free.sort((a, b) => power(b) - power(a) || a - b)[0];
-  return { offer: partner ?? NEUTRAL, breakAlliance: 0 };
+  const leaderBloc = blocOf(state, leader);
+  const candidates = others.filter((n) => !leaderBloc.includes(n) && roomIn(n));
+  const suitor = candidates.find((n) => state.offers[n] === nation);
+  if (suitor !== undefined) return { ...plan, offer: suitor };
+  const partner = candidates.sort((a, b) => blocPower(b) - blocPower(a) || a - b)[0];
+  return { ...plan, offer: partner ?? NEUTRAL };
 }
 
 function encirclementGain(map, state, nation, target) {
@@ -50,7 +79,7 @@ function encirclementGain(map, state, nation, target) {
   const owner = state.owner.slice();
   owner[target] = nation;
   const before = supplyNetwork(map, state);
-  const after = supplyNetwork(map, { owner, allies: state.allies });
+  const after = supplyNetwork(map, { owner, faction: state.faction });
   let cut = 0;
   for (const p of map.provinces) {
     if (owner[p.id] === enemy && before[p.id] && !after[p.id]) cut += 1 + state.troops[p.id] * 0.15;
@@ -79,7 +108,8 @@ function frontDistances(provinces, owns, friendly, mine) {
   return distance;
 }
 
-export function planAiOrders(map, state, nation) {
+export function planAiOrders(map, state, nation, difficulty = "normal") {
+  const level = DIFFICULTIES[difficulty] ?? DIFFICULTIES.normal;
   const orders = emptyOrders();
   if (!state.alive[nation]) return orders;
   Object.assign(orders, planDiplomacy(map, state, nation));
@@ -97,12 +127,13 @@ export function planAiOrders(map, state, nation) {
     }, 0);
   const distance = frontDistances(provinces, owns, friendly, mine);
   const lateGame = state.turn > state.maxTurns - 4;
-  let budget = state.industry[nation];
+  let budget = Math.floor(state.industry[nation] * level.spend) - (orders.aidAmount || 0);
 
   const cities = mine.filter((id) => provinces[id].city);
   const factories = factoryCount(state, nation);
-  const factoryTarget = state.turn < 6 ? 2 : state.turn < 10 ? 4 : 5;
-  const attack = attackMultiplier(nation, state.turn);
+  const age = relativeTurn(state);
+  const factoryTarget = (age < 6 ? 2 : age < 10 ? 4 : 5) + level.factories;
+  const attack = attackMultiplier(state, nation);
   if (!lateGame && factories < factoryTarget) {
     const site = cities
       .filter((id) => canBuild(map, state, nation, id, BUILDING.FACTORY) && threat(id) <= state.troops[id])
@@ -144,7 +175,7 @@ export function planAiOrders(map, state, nation) {
   const reserve = {};
   for (const id of mine) {
     available[id] = state.troops[id];
-    reserve[id] = Math.min(available[id], Math.ceil(threat(id) * (lateGame ? 0.32 : 0.5)));
+    reserve[id] = Math.min(available[id], Math.ceil(threat(id) * (lateGame ? 0.32 : level.reserve)));
   }
   const spare = (id) => available[id] - reserve[id];
 
@@ -157,7 +188,10 @@ export function planAiOrders(map, state, nation) {
     .map((target) => {
       const enemy = state.owner[target] !== NEUTRAL;
       const defense = state.troops[target] * defenseMultiplier(map, state, target);
-      const need = Math.ceil((defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) / attack) + 1;
+      const need = Math.max(
+        1,
+        Math.ceil((defense + (enemy ? state.troops[target] * 0.35 + 1 : 0)) / attack) + 1 + level.margin,
+      );
       const value =
         (provinces[target].city ? 5 : 1) +
         (provinces[target].capitalOf >= 0 ? 8 : 0) +
@@ -168,13 +202,16 @@ export function planAiOrders(map, state, nation) {
     })
     .sort((a, b) => b.value - a.value || a.target - b.target);
 
+  let launched = 0;
   for (const plan of plans) {
+    if (launched >= level.attacks) break;
     const sources = provinces[plan.target].neighbors
       .filter((id) => owns(id) && spare(id) > 0)
       .sort((a, b) => spare(b) - spare(a) || a - b);
     const total = sources.reduce((sum, id) => sum + spare(id), 0);
     if (total < plan.need) continue;
 
+    launched++;
     let remaining = plan.need + (plan.enemy ? 2 : 0);
     for (const id of sources) {
       if (remaining <= 0) break;

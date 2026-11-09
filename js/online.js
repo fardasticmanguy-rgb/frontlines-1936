@@ -1,7 +1,8 @@
 import { planAiOrders } from "./ai.js";
-import { DEFAULT_TURNS, NATIONS, NATION_NAMES, NATION_TRAITS } from "./config.js";
+import { nationCountFor, rosterFor } from "./setup.js";
+import { DEFAULT_TURNS, NATIONS, NATION_NAMES, TRAITS } from "./config.js";
 import { decodeOrders, decodeState, encodeOrders, encodeState } from "./codec.js";
-import { flagImage } from "./flags.js";
+import { flagImage, flagUrlFor } from "./flags.js";
 import {
   applyAnimation,
   isGuest,
@@ -108,6 +109,8 @@ export function saveHostedGame(state) {
     code: net.code,
     gameId: net.gameId,
     seed: map.seed,
+    mapOptions: game.mapOptions,
+    difficulty: game.difficulty,
     timer: game.timer,
     seats: game.seats.map(({ type, playerId: id }) => ({ type, playerId: id })),
     state: state || game.state,
@@ -150,7 +153,7 @@ function validListing(listing) {
     CODE_PATTERN.test(listing.code) &&
     Number.isInteger(listing.players) &&
     listing.players >= 1 &&
-    listing.players < NATIONS.length + 1
+    listing.players <= (Number.isInteger(listing.seats) ? listing.seats : NATIONS.length)
   );
 }
 
@@ -185,7 +188,7 @@ export function renderPublicGames() {
       title.textContent = `${cleanName(game.name) || "Someone"}'s war`;
       const count = document.createElement("span");
       count.className = "count";
-      count.textContent = `${game.players}/${NATIONS.length} · JOIN`;
+      count.textContent = `${game.players}/${game.seats || 4} · JOIN`;
       row.append(title, count);
       return row;
     }),
@@ -198,13 +201,13 @@ function updateListing(players) {
     net?.role === "host" &&
     net.visibility === "public" &&
     currentScreen() === "lobby" &&
-    players < NATIONS.length;
+    players < seatCount(net);
   if (visible && !directory) {
     openDirectory().then(() => updateListing(players));
     return;
   }
   if (!directory) return;
-  const listing = visible ? { code: net.code, name: commanderName(), players } : null;
+  const listing = visible ? { code: net.code, name: commanderName(), players, seats: seatCount(net) } : null;
   const key = JSON.stringify(listing);
   if (key === listingKey) return;
   listingKey = key;
@@ -250,6 +253,10 @@ export async function openRoom(code, role, resume = false) {
     timer: 45,
     maxTurns: DEFAULT_TURNS,
     visibility: "private",
+    scenario: "random",
+    nations: 4,
+    size: "medium",
+    difficulty: "normal",
     hostMissingFor: 0,
     offlineFor: 0,
     sinceBroadcast: 0,
@@ -287,15 +294,17 @@ function lobbySeats() {
   }
   net.joinOrder = net.joinOrder.filter((id) => guests.includes(id));
   for (const id of guests) if (!net.joinOrder.includes(id)) net.joinOrder.push(id);
-  const seats = [playerId, ...net.joinOrder.slice(0, NATIONS.length - 1)];
-  while (seats.length < NATIONS.length) seats.push("ai");
+  const seats = [playerId, ...net.joinOrder.slice(0, seatCount(net) - 1)];
+  while (seats.length < seatCount(net)) seats.push("ai");
   return seats;
 }
 
-function seatRow(nation, title, detail) {
+function seatRow(flag, title, detail) {
   const row = document.createElement("div");
   row.className = "seat";
-  row.innerHTML = flagImage(nation);
+  const image = document.createElement("img");
+  image.src = flagUrlFor(flag);
+  row.append(image);
   const name = document.createElement("span");
   name.className = "seat-name";
   name.textContent = title;
@@ -320,7 +329,14 @@ export function renderLobby() {
   if (hosting) {
     seats = lobbySeats();
     names = seats.map((id) => (id === "ai" ? "" : id === playerId ? commanderName() : guestName(id)));
-    const key = JSON.stringify([seats, names, net.timer, net.maxTurns]);
+    const key = JSON.stringify([
+      seats,
+      names,
+      net.timer,
+      net.maxTurns,
+      encodeMapOptions(net),
+      net.difficulty,
+    ]);
     if (key !== net.lobbyKey) {
       net.lobbyKey = key;
       net.room
@@ -333,6 +349,7 @@ export function renderLobby() {
           names,
           timer: net.timer,
           length: net.maxTurns,
+          map: encodeMapOptions(net),
         })
         .catch(() => {});
     }
@@ -340,6 +357,7 @@ export function renderLobby() {
     const host = hostPeer();
     if (typeof host?.presence.lobby === "string") seats = host.presence.lobby.split(",");
     if (Array.isArray(host?.presence.names)) names = host.presence.names;
+    if (typeof host?.presence.map === "string") Object.assign(net, decodeMapOptions(host.presence.map));
   }
 
   $("lobby-code").textContent = net.code;
@@ -347,12 +365,23 @@ export function renderLobby() {
     ...seats.slice(0, NATIONS.length).map((id, n) => {
       const role = id === "ai" ? "AI COMMANDER" : n === 0 ? "HOST" : "PLAYER";
       const you = id === playerId ? " · YOU" : "";
-      const title = id === "ai" ? NATION_NAMES[n] : `${NATION_NAMES[n]} · ${cleanName(names[n]) || "Player"}`;
-      return seatRow(n, title, `${NATION_TRAITS[n].name} · ${role}${you}`);
+      const nation = rosterFor(net.scenario)[n];
+      const title = id === "ai" ? nation.name : `${nation.name} · ${cleanName(names[n]) || "Player"}`;
+      return seatRow(nation.flag, title, `${TRAITS[nation.trait].name} · ${role}${you}`);
     }),
   );
 
-  for (const id of ["launch", "option-timer", "option-length", "option-visibility"]) $(id).hidden = !hosting;
+  for (const id of [
+    "launch",
+    "option-timer",
+    "option-length",
+    "option-visibility",
+    "option-scenario",
+    "option-difficulty",
+  ]) {
+    $(id).hidden = !hosting;
+  }
+  syncOptionButtons();
   $("lobby-link").textContent =
     transportKind === "peer"
       ? "Friends open this same link, tap PLAY ONLINE and enter the code."
@@ -381,13 +410,33 @@ export function renderLobby() {
     : "Looking for the host… double-check the code.";
 }
 
+const encodeMapOptions = (net) => `${net.scenario}:${net.nations}:${net.size}`;
+
+function decodeMapOptions(text) {
+  const [scenario, nations, size] = String(text || "").split(":");
+  return {
+    scenario: scenario === "europe" ? "europe" : "random",
+    nations: Number(nations) || 4,
+    size: size || "medium",
+  };
+}
+
+const seatCount = (net) => nationCountFor(net);
+
 export function syncOptionButtons() {
   const net = store.net;
   if (!net) return;
+  const hosting = net.role === "host";
+  $("option-nations").hidden = !hosting || net.scenario === "europe";
+  $("option-size").hidden = !hosting || net.scenario === "europe";
   for (const [row, key] of [
     ["option-timer", "timer"],
     ["option-length", "maxTurns"],
     ["option-visibility", "visibility"],
+    ["option-scenario", "scenario"],
+    ["option-nations", "nations"],
+    ["option-size", "size"],
+    ["option-difficulty", "difficulty"],
   ]) {
     for (const button of $(row).querySelectorAll("button")) {
       button.classList.toggle("on", button.dataset.value === String(net[key]));
@@ -398,7 +447,10 @@ export function syncOptionButtons() {
 export function setLobbyOption(key, value) {
   const net = store.net;
   if (!net || net.role !== "host") return;
-  net[key] = key === "visibility" ? (value === "public" ? "public" : "private") : Number(value);
+  if (key === "visibility") net.visibility = value === "public" ? "public" : "private";
+  else if (key === "scenario") net.scenario = value === "europe" ? "europe" : "random";
+  else if (key === "size" || key === "difficulty") net[key] = value;
+  else net[key] = Number(value);
   syncOptionButtons();
   renderLobby();
 }
@@ -446,7 +498,13 @@ export function launchGame() {
   });
   net.gameId = Math.random().toString(36).slice(2, 8);
   closeDirectory();
-  newGame("online", seats, randomSeed(), { timer: net.timer, me: 0, maxTurns: net.maxTurns });
+  newGame("online", seats, randomSeed(), {
+    timer: net.timer,
+    me: 0,
+    maxTurns: net.maxTurns,
+    difficulty: net.difficulty,
+    mapOptions: decodeMapOptions(encodeMapOptions(net)),
+  });
 }
 
 export function resumeHostedGame(save) {
@@ -459,8 +517,9 @@ export function resumeHostedGame(save) {
     {
       timer: save.timer,
       me: 0,
-      maxTurns: save.state.maxTurns,
       state: save.state,
+      difficulty: save.difficulty,
+      mapOptions: save.mapOptions,
     },
   );
 }
@@ -484,6 +543,7 @@ export function hostBroadcast(state, events) {
       phase: game.phase === "over" ? "over" : "play",
       gameId: net.gameId,
       seed: map.seed,
+      map: `${game.mapOptions.scenario}:${game.mapOptions.nations ?? 4}:${game.mapOptions.size ?? "medium"}`,
       hash: map.hash,
       seats: seatsString(),
       state: encodeState(shownState, extras, shownEvents),
@@ -572,7 +632,7 @@ export function hostCheckReady() {
     else if (seat.type === "remote" && seatPeer(n)) {
       const presence = seatPeer(n).presence;
       planned = presence.turn === state.turn ? decodeOrders(presence.orders) : emptyOrders();
-    } else planned = planAiOrders(map, state, n);
+    } else planned = planAiOrders(map, state, n, game.difficulty);
     return sanitizeOrders(map, state, n, planned);
   });
   runResolution(orders);
@@ -608,7 +668,7 @@ function startGuestGame(presence) {
   const net = store.net;
   const seats = seatsFrom(presence.seats);
   const me = seats.findIndex((s) => s.type === "local");
-  newGame("online", seats, Number(presence.seed), { me });
+  newGame("online", seats, Number(presence.seed), { me, mapOptions: decodeMapOptions(presence.map) });
   net.seatsKey = String(presence.seats || "");
   if (presence.hash !== store.map.hash) toast("Map mismatch with the host. Try leaving and rejoining.");
   net.lastState = null;
