@@ -2,6 +2,9 @@ import { BUILDING, NATIONS, NEUTRAL } from "./config.js";
 import {
   ARMOR_COST,
   ARMOR_DEFENSE,
+  GUN_ATTACK,
+  GUN_COST,
+  GUN_DEFENSE,
   FACTORY_OUTPUT,
   KEEP_OFFER,
   RAIL_RANGE,
@@ -21,7 +24,10 @@ import {
   factoryCount,
   income,
   isHostile,
-  maxTanks,
+  specialCap,
+  flankBonus,
+  gunsOf,
+  armorAttack,
   provinceCount,
   relativeTurn,
   resolveTurn,
@@ -185,7 +191,7 @@ function threatMap(map, state, nation, memo = null) {
     for (const n of p.neighbors) {
       const other = state.owner[n];
       if (!provinces[n].land || other === NEUTRAL || !isHostile(state, nation, other)) continue;
-      pushes.push(attackStrength(state, other, state.troops[n], armor[n], p.terrain));
+      pushes.push(attackStrength(state, other, state.troops[n], armor[n], p.terrain, gunsOf(state)[n]));
     }
     if (!pushes.length) return guard;
     pushes.sort((a, b) => b - a);
@@ -253,6 +259,8 @@ function planEconomy(map, state, nation, level, orders, context, funds = null) {
   }
 
   const { mine, friendly } = context;
+  const supplied = supplyNetwork(map, state);
+  const deployable = mine.filter((id) => supplied[id]);
   let open = 0;
   let fronts = 0;
   let pressure = 0;
@@ -266,25 +274,36 @@ function planEconomy(map, state, nation, level, orders, context, funds = null) {
   }
   const openShare = fronts ? open / fronts : 0;
   const calm = pressure < state.industry[nation] * 0.5;
-  const tankBudget = calm && openShare > 0.4 ? Math.floor(budget * level.tanks * openShare) : 0;
-  const forges = cities
-    .filter((id) => maxTanks(state, id) > 0 && distance[id] <= 4)
-    .sort((a, b) => distance[a] - distance[b] || maxTanks(state, b) - maxTanks(state, a) || a - b);
-  let tankFunds = tankBudget;
-  for (const id of forges) {
-    const count = Math.min(maxTanks(state, id), Math.floor(tankFunds / ARMOR_COST));
-    if (count <= 0) break;
-    orders.tanks[id] = count;
-    tankFunds -= count * ARMOR_COST;
-    budget -= count * ARMOR_COST;
+  const heavy = Math.min(specialCap(state, nation), Math.floor((budget * (0.3 + level.tanks)) / 2));
+  const tankCount = calm && openShare > 0.4 ? Math.round(heavy * openShare * 0.8) : 0;
+  const gunCount = heavy - tankCount;
+  const gap = (id) => threat[id] - defenseStrength(map, state, id);
+  const stages = deployable.filter((id) => distance[id] <= 1).sort((a, b) => gap(b) - gap(a) || a - b);
+  const stage = (k) => stages[k % Math.max(1, Math.min(8, stages.length))] ?? deployable[0];
+  for (let k = 0; k < tankCount; k++) {
+    const id = stage(k);
+    if (id === undefined || budget < ARMOR_COST) break;
+    orders.tanks[id] = (orders.tanks[id] || 0) + 1;
+    budget -= ARMOR_COST;
+  }
+  for (let k = 0; k < gunCount; k++) {
+    const id = stage(k);
+    if (id === undefined || budget < GUN_COST) break;
+    orders.artillery[id] = (orders.artillery[id] || 0) + 1;
+    budget -= GUN_COST;
   }
 
   const added = {};
-  while (budget > 0 && cities.length) {
-    let neediest = cities[0];
+  const sites = deployable.length ? deployable : cities;
+  while (budget > 0 && sites.length) {
+    let neediest = sites[0];
     let bestNeed = -Infinity;
-    for (const id of cities) {
-      const garrison = state.troops[id] + (added[id] || 0) + (orders.tanks[id] || 0) * ARMOR_DEFENSE;
+    for (const id of sites) {
+      const garrison =
+        state.troops[id] +
+        (added[id] || 0) +
+        (orders.tanks[id] || 0) * ARMOR_DEFENSE +
+        (orders.artillery[id] || 0) * GUN_DEFENSE;
       const need =
         (threat[id] * 1.25) / Math.max(0.5, defenseMultiplier(map, state, id)) -
         garrison -
@@ -301,19 +320,33 @@ function planEconomy(map, state, nation, level, orders, context, funds = null) {
   for (const id in added) orders.recruits[id] = added[id];
 }
 
+const KINDS = ["armor", "guns", "infantry"];
+
+function unitValue(kind, terrain) {
+  if (kind === "armor") return armorAttack(terrain);
+  if (kind === "guns") return GUN_ATTACK;
+  return 1;
+}
+
+function sendStrength(state, nation, kit, terrain) {
+  const count = kit.armor + kit.guns + kit.infantry;
+  return attackStrength(state, nation, count, kit.armor, terrain, kit.guns);
+}
+
 function planMilitary(map, state, nation, level, style, orders, context) {
   const { provinces } = map;
   const armor = armorOf(state);
+  const guns = gunsOf(state);
   const { mine, owns, friendly, threat, distance, lateGame } = context;
   const focus = pickFocus(map, state, nation, mine);
   const supplied = supplyNetwork(map, state);
 
-  const infantry = {};
-  const tanks = {};
+  const pool = {};
   const reserve = {};
   for (const id of mine) {
-    tanks[id] = armor[id];
-    infantry[id] = state.troops[id] - armor[id];
+    const armored = armor[id];
+    const artillery = Math.min(guns[id], state.troops[id] - armored);
+    pool[id] = { armor: armored, guns: artillery, infantry: state.troops[id] - armored - artillery };
     const holdFactor = (lateGame ? 0.45 : level.reserve) * style.reserve;
     const multiplier = Math.max(0.5, defenseMultiplier(map, state, id));
     const wanted = Math.ceil((threat[id] * holdFactor) / multiplier);
@@ -322,7 +355,9 @@ function planMilitary(map, state, nation, level, style, orders, context) {
       wanted + (provinces[id].capitalOf >= 0 && threat[id] > 0 ? 1 : 0),
     );
   }
-  const spare = (id) => infantry[id] + tanks[id] - reserve[id];
+  const total = (id) => pool[id].armor + pool[id].guns + pool[id].infantry;
+  const spare = (id) => total(id) - reserve[id];
+  const pocketed = new Set(mine.filter((id) => !supplied[id]));
 
   const targets = new Set();
   for (const id of mine) {
@@ -352,6 +387,7 @@ function planMilitary(map, state, nation, level, style, orders, context) {
       encirclementGain(map, state, nation, target, supplied) * 1.4;
     if (enemy && blocOf(state, holder).includes(focus)) value *= style.focus;
     if (enemy && !supplied[target]) value += 1.5;
+    if (p.neighbors.some((n) => pocketed.has(n))) value += 4;
     if (lateGame) value += points * 5;
     return { target, need, enemy, value, terrain: p.terrain, score: value / Math.sqrt(need + 2) };
   });
@@ -363,48 +399,57 @@ function planMilitary(map, state, nation, level, style, orders, context) {
     const sources = provinces[plan.target].neighbors
       .filter((id) => owns(id) && spare(id) > 0)
       .sort((a, b) => spare(b) - spare(a) || a - b);
-    const potential = sources.reduce((sum, id) => {
-      const free = spare(id);
-      const useTanks = Math.min(tanks[id], free);
-      return sum + attackStrength(state, nation, free, useTanks, plan.terrain);
-    }, 0);
+    const order = KINDS.slice().sort((a, b) => unitValue(b, plan.terrain) - unitValue(a, plan.terrain));
+    const flank = 1 + flankBonus(sources.length);
+    const potential =
+      sources.reduce((sum, id) => {
+        let free = spare(id);
+        const kit = { armor: 0, guns: 0, infantry: 0 };
+        for (const kind of order) {
+          const take = Math.min(pool[id][kind], free);
+          kit[kind] = take;
+          free -= take;
+        }
+        return sum + sendStrength(state, nation, kit, plan.terrain);
+      }, 0) * flank;
     if (potential < plan.need) continue;
 
     launched++;
-    const armorFirst = plan.terrain === 0;
+    const committed = [];
     let gathered = 0;
+    const measure = () =>
+      committed.reduce((sum, c) => sum + sendStrength(state, nation, c.kit, plan.terrain), 0) *
+      (1 + flankBonus(committed.filter((c) => c.kit.armor + c.kit.guns + c.kit.infantry > 0).length));
     for (const id of sources) {
       if (gathered >= plan.need) break;
+      const entry = { id, kit: { armor: 0, guns: 0, infantry: 0 } };
+      committed.push(entry);
       let free = spare(id);
-      let sendTanks = 0;
-      let sendInfantry = 0;
       while (free > 0 && gathered < plan.need) {
-        const tankFirst = armorFirst ? tanks[id] - sendTanks > 0 : infantry[id] - sendInfantry <= 0;
-        if (tankFirst && tanks[id] - sendTanks > 0) sendTanks++;
-        else if (infantry[id] - sendInfantry > 0) sendInfantry++;
-        else if (tanks[id] - sendTanks > 0) sendTanks++;
-        else break;
+        const kind = order.find((k) => pool[id][k] - entry.kit[k] > 0);
+        if (!kind) break;
+        entry.kit[kind]++;
         free--;
-        gathered = 0;
-        for (const m of orders.moves) {
-          if (m.to === plan.target) gathered += attackStrength(state, nation, m.count, m.armor, plan.terrain);
-        }
-        gathered += attackStrength(state, nation, sendTanks + sendInfantry, sendTanks, plan.terrain);
+        gathered = measure();
       }
       const overkill = plan.enemy ? Math.min(2, free) : 0;
       for (let k = 0; k < overkill; k++) {
-        if (infantry[id] - sendInfantry > 0) sendInfantry++;
-        else if (tanks[id] - sendTanks > 0) sendTanks++;
+        const kind = ["infantry", "guns", "armor"].find((name) => pool[id][name] - entry.kit[name] > 0);
+        if (kind) entry.kit[kind]++;
       }
-      if (sendTanks + sendInfantry <= 0) continue;
-      orders.moves.push({ from: id, to: plan.target, count: sendTanks + sendInfantry, armor: sendTanks });
-      tanks[id] -= sendTanks;
-      infantry[id] -= sendInfantry;
+    }
+    for (const { id, kit } of committed) {
+      const count = kit.armor + kit.guns + kit.infantry;
+      if (count <= 0) continue;
+      orders.moves.push({ from: id, to: plan.target, count, armor: kit.armor, guns: kit.guns });
+      for (const kind of KINDS) pool[id][kind] -= kit[kind];
     }
   }
 
   const deficit = (id) =>
-    threat[id] * 1.1 - (infantry[id] + tanks[id] * ARMOR_DEFENSE) * defenseMultiplier(map, state, id);
+    threat[id] * 1.1 -
+    (pool[id].infantry + pool[id].armor * ARMOR_DEFENSE + pool[id].guns * GUN_DEFENSE) *
+      defenseMultiplier(map, state, id);
   const staging = new Map();
   for (const plan of plans.slice(0, 6)) {
     for (const n of provinces[plan.target].neighbors) {
@@ -413,7 +458,7 @@ function planMilitary(map, state, nation, level, style, orders, context) {
   }
 
   for (const id of mine) {
-    const free = infantry[id] + tanks[id] - (distance[id] <= 1 ? reserve[id] : 0);
+    const free = total(id) - (distance[id] <= 1 ? reserve[id] : 0);
     if (free <= 0 || distance[id] === Infinity) continue;
     if (distance[id] <= 1 && deficit(id) > -2) continue;
     let destination = -1;
@@ -435,12 +480,15 @@ function planMilitary(map, state, nation, level, style, orders, context) {
           .sort((a, b) => distance[a] - distance[b] || threat[b] - threat[a] || a - b)[0] ?? -1;
     }
     if (destination < 0 || destination === id) continue;
-    const sendTanks = Math.min(tanks[id], free);
-    const sendInfantry = Math.min(infantry[id], free - sendTanks);
-    if (sendTanks + sendInfantry <= 0) continue;
-    orders.moves.push({ from: id, to: destination, count: sendTanks + sendInfantry, armor: sendTanks });
-    tanks[id] -= sendTanks;
-    infantry[id] -= sendInfantry;
+    const sendTanks = Math.min(pool[id].armor, free);
+    const sendGuns = Math.min(pool[id].guns, free - sendTanks);
+    const sendInfantry = Math.min(pool[id].infantry, free - sendTanks - sendGuns);
+    const count = sendTanks + sendGuns + sendInfantry;
+    if (count <= 0) continue;
+    orders.moves.push({ from: id, to: destination, count, armor: sendTanks, guns: sendGuns });
+    pool[id].armor -= sendTanks;
+    pool[id].guns -= sendGuns;
+    pool[id].infantry -= sendInfantry;
   }
 }
 
