@@ -33,7 +33,6 @@ import { store } from "./store.js";
 import {
   $,
   bindPanel,
-  currentScreen,
   keepAwake,
   renderPanel,
   renderTopBar,
@@ -43,7 +42,7 @@ import {
   updateClock,
 } from "./ui.js";
 import { renderSetup, setupOption, startSetupGame, toggleSeat } from "./setup.js";
-import { resetZoom, resizeViewport, view } from "./view.js";
+import { resetZoom, resizeViewport, setRotate, view, viewSettings } from "./view.js";
 
 const ERROR_MESSAGES = {
   not_found: "No game found with that code.",
@@ -263,10 +262,22 @@ function bindMenus() {
   }
 
   on("end-turn", endTurn);
+  on("production-button", () => {
+    const game = store.game;
+    if (!game) return;
+    game.panelView = game.panelView === "production" ? "" : "production";
+    game.selectedNation = -1;
+    renderPanel();
+  });
+  on("pause-rotate", () => {
+    setRotate(!viewSettings.rotate);
+    $("pause-rotate").textContent = `ROTATE ON PORTRAIT: ${viewSettings.rotate ? "ON" : "OFF"}`;
+  });
   on("fit-button", () => resetZoom(store.game));
   on("menu-button", () => {
     $("pause-note").textContent = isOnline() ? `Game code ${store.net.code}` : "";
     $("pause-sound").textContent = `SOUND: ${isMuted() ? "OFF" : "ON"}`;
+    $("pause-rotate").textContent = `ROTATE ON PORTRAIT: ${viewSettings.rotate ? "ON" : "OFF"}`;
     showScreen("pause");
   });
   on("pause-resume", () => showScreen(null));
@@ -302,15 +313,6 @@ function bindMenus() {
 }
 
 function bindGlobalKeys() {
-  window.addEventListener("keydown", (event) => {
-    const game = store.game;
-    if (!game || game.mode === "demo" || currentScreen()) return;
-    if (event.key === "Enter") endTurn();
-    if (event.key === "Escape") {
-      game.selected = -1;
-      renderPanel();
-    }
-  });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && store.game && store.game.mode !== "demo") keepAwake();
   });

@@ -1,7 +1,25 @@
 import { MAP_HEIGHT, MAP_WIDTH, clamp } from "./config.js";
 import { store } from "./store.js";
 
-const MAX_ZOOM = 3.2;
+const MAX_ZOOM = 6;
+const ROTATE_KEY = "frontlines.rotateMap";
+
+function loadRotate() {
+  try {
+    return localStorage.getItem(ROTATE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export const viewSettings = { rotate: loadRotate() };
+
+export function setRotate(on) {
+  viewSettings.rotate = Boolean(on);
+  try {
+    localStorage.setItem(ROTATE_KEY, on ? "1" : "0");
+  } catch {}
+}
 const MAX_LAYER_PIXELS = 7e6;
 const FULL_MAP = { x0: 0, y0: 0, x1: MAP_WIDTH, y1: MAP_HEIGHT };
 
@@ -55,7 +73,7 @@ export function updateLayout() {
     const h = mapBounds.y1 - mapBounds.y0;
     const upright = Math.min(view.width / w, available / h);
     const sideways = Math.min(view.width / h, available / w);
-    rotated = sideways > upright * 1.12;
+    rotated = viewSettings.rotate && sideways > upright * 1.12;
     if (rotated !== view.rotated) resetZoom(game);
   }
   view.rotated = rotated;

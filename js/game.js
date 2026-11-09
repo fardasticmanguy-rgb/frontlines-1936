@@ -1,4 +1,4 @@
-import { DIFFICULTIES, planAiOrders } from "./ai.js";
+import { DIFFICULTIES, planAiOrders, planProduction } from "./ai.js";
 import { playSound, unlockAudio } from "./audio.js";
 import { NATIONS, NATION_NAMES } from "./config.js";
 import { generateMap } from "./map.js";
@@ -25,7 +25,11 @@ import {
   sweepProvince,
 } from "./render.js";
 import {
+  ARMOR_COST,
   FACTORY_OUTPUT,
+  armorOf,
+  canReach,
+  maxTanks,
   areAllied,
   attackStrength,
   buildCostAt,
@@ -86,6 +90,10 @@ export function newGame(mode, seats, seed, options = {}) {
     hint: null,
     report: null,
     selectedNation: -1,
+    group: [],
+    history: [],
+    production: NATIONS.map(() => null),
+    panelView: "",
     timer: options.timer || 0,
     deadline: 0,
     lastTick: -1,
@@ -170,6 +178,78 @@ export function availableFrom(id) {
   return game.state.troops[id] - committed;
 }
 
+export function availableArmor(id) {
+  const game = store.game;
+  const committed = game.orders[game.me].moves
+    .filter((m) => m.from === id)
+    .reduce((sum, m) => sum + (m.armor || 0), 0);
+  return armorOf(game.state)[id] - committed;
+}
+
+function availableInfantry(id) {
+  return availableFrom(id) - availableArmor(id);
+}
+
+export function selection() {
+  const game = store.game;
+  if (!game || game.selected < 0) return [];
+  return [game.selected, ...game.group.filter((id) => id !== game.selected)].filter(
+    (id) => game.state.owner[id] === game.me,
+  );
+}
+
+export function canOrder(from, to) {
+  const game = store.game;
+  return (
+    from !== to &&
+    game.state.owner[from] === game.me &&
+    !areAllied(game.state, game.me, game.state.owner[to]) &&
+    store.map.provinces[to]?.land &&
+    canReach(store.map, game.state, game.me, from, to)
+  );
+}
+
+function remember() {
+  const game = store.game;
+  if (game.me < 0) return;
+  game.history.push(JSON.stringify(game.orders[game.me]));
+  if (game.history.length > 60) game.history.shift();
+}
+
+export function undoOrders() {
+  const game = store.game;
+  if (!canPlan() || !game.history.length) {
+    toast("Nothing to undo");
+    return;
+  }
+  game.orders[game.me] = JSON.parse(game.history.pop());
+  playSound("click");
+  ordersChanged();
+}
+
+export function clearMovesFrom(ids) {
+  const game = store.game;
+  if (!canPlan()) return;
+  const orders = game.orders[game.me];
+  if (!orders.moves.some((m) => ids.includes(m.from))) return;
+  remember();
+  orders.moves = orders.moves.filter((m) => !ids.includes(m.from));
+  playSound("click");
+  ordersChanged();
+}
+
+export function orderFromSelection(target, share = 1) {
+  const game = store.game;
+  if (!canPlan()) return false;
+  const sources = selection().filter((id) => canOrder(id, target) && availableFrom(id) > 0);
+  if (!sources.length) return false;
+  remember();
+  for (const from of sources) placeMove(from, target, share);
+  playSound("order");
+  ordersChanged();
+  return true;
+}
+
 export function industryLeft() {
   const game = store.game;
   return game.state.industry[game.me] - ordersCost(game.orders[game.me], game.me, game.state);
@@ -181,18 +261,37 @@ export function ordersChanged() {
   if (isGuest()) sendGuestOrders();
 }
 
-export function addMove(from, to, count) {
+function placeMove(from, to, share) {
+  const game = store.game;
+  const orders = game.orders[game.me];
+  const free = availableFrom(from);
+  const count = share >= 1 ? free : Math.max(1, Math.floor(free * share));
+  const terrain = store.map.provinces[to].terrain;
+  const tanksFirst = terrain < 2 && game.state.owner[to] !== game.me;
+  const tanks = tanksFirst
+    ? Math.min(availableArmor(from), count)
+    : Math.max(0, count - availableInfantry(from));
+  const existing = orders.moves.find((m) => m.from === from && m.to === to);
+  if (existing) {
+    existing.count += count;
+    existing.armor = (existing.armor || 0) + tanks;
+  } else if (count > 0) orders.moves.push({ from, to, count, armor: tanks });
+  orders.moves = orders.moves.filter((m) => m.count > 0);
+}
+
+export function addMove(from, to, share = 1) {
   const game = store.game;
   if (areAllied(game.state, game.me, game.state.owner[to])) {
     toast("You can't attack your ally");
     return;
   }
-  const orders = game.orders[game.me];
-  const free = availableFrom(from);
-  const existing = orders.moves.find((m) => m.from === from && m.to === to);
-  if (existing) existing.count += Math.min(count, free);
-  else if (free > 0) orders.moves.push({ from, to, count: Math.min(count, free) });
-  orders.moves = orders.moves.filter((m) => m.count > 0);
+  if (!canReach(store.map, game.state, game.me, from, to)) {
+    toast("Too far: attack a neighbor, or redeploy up to 4 provinces through your own land");
+    return;
+  }
+  if (availableFrom(from) <= 0) return;
+  remember();
+  placeMove(from, to, share);
   playSound("order");
   ordersChanged();
 }
@@ -200,22 +299,98 @@ export function addMove(from, to, count) {
 export function applyPanelAction(action, { from, to, id }) {
   if (!canPlan()) return;
   const game = store.game;
+  if (action === "undo") {
+    undoOrders();
+    return;
+  }
+  remember();
   const orders = game.orders[game.me];
   const move = orders.moves.find((m) => m.from === from && m.to === to);
   const removeMove = () => orders.moves.splice(orders.moves.indexOf(move), 1);
 
   switch (action) {
     case "more":
-      if (move && availableFrom(from) > 0) move.count++;
+      if (move && availableInfantry(from) > 0) move.count++;
+      else if (move && availableArmor(from) > 0) {
+        move.count++;
+        move.armor = (move.armor || 0) + 1;
+      }
       break;
     case "less":
-      if (move && --move.count <= 0) removeMove();
+      if (move && move.count - (move.armor || 0) > 0) move.count--;
+      else if (move && move.armor > 0) {
+        move.count--;
+        move.armor--;
+      }
+      if (move && move.count <= 0) removeMove();
+      break;
+    case "half":
+      if (move) {
+        const total = move.count + availableFrom(from);
+        const tanks = (move.armor || 0) + availableArmor(from);
+        move.count = Math.max(1, Math.floor(total / 2));
+        move.armor = Math.min(tanks, move.count, Math.ceil(tanks / 2));
+      }
       break;
     case "all":
-      if (move) move.count += availableFrom(from);
+      if (move) {
+        move.armor = (move.armor || 0) + availableArmor(from);
+        move.count += availableFrom(from);
+      }
+      break;
+    case "tank-more":
+      if (move && availableArmor(from) > 0) {
+        if (move.count - (move.armor || 0) <= 0) move.count++;
+        move.armor = (move.armor || 0) + 1;
+      }
+      break;
+    case "tank-less":
+      if (move && move.armor > 0) {
+        if (availableInfantry(from) <= 0) move.count--;
+        move.armor--;
+        if (move.count <= 0) removeMove();
+      }
       break;
     case "cancel":
       if (move) removeMove();
+      break;
+    case "clear-orders":
+      orders.moves = [];
+      orders.recruits = {};
+      orders.tanks = {};
+      orders.builds = {};
+      break;
+    case "clear-production":
+      orders.recruits = {};
+      orders.tanks = {};
+      orders.builds = {};
+      break;
+    case "auto-production": {
+      orders.recruits = {};
+      orders.tanks = {};
+      orders.builds = {};
+      const plan = planProduction(store.map, game.state, game.me, industryLeft());
+      Object.assign(orders.recruits, plan.recruits);
+      Object.assign(orders.tanks, plan.tanks);
+      Object.assign(orders.builds, plan.builds);
+      break;
+    }
+    case "repeat":
+      game.repeat = !repeatOn();
+      saveRepeat(game.repeat);
+      break;
+    case "tank1":
+    case "tankMax": {
+      const room = maxTanks(game.state, id) - (orders.tanks[id] || 0);
+      const wanted = action === "tank1" ? 1 : room;
+      const count = Math.min(wanted, room, Math.floor(industryLeft() / ARMOR_COST));
+      if (room <= 0) toast("Tank output is limited by this city's factory level (2 per level)");
+      else if (count > 0) orders.tanks[id] = (orders.tanks[id] || 0) + count;
+      else toast("Not enough industry");
+      break;
+    }
+    case "untank":
+      if (orders.tanks[id] && --orders.tanks[id] <= 0) delete orders.tanks[id];
       break;
     case "recruit1":
     case "recruit5":
@@ -305,10 +480,64 @@ function computeHint() {
   }
 }
 
+const REPEAT_KEY = "frontlines.repeatProduction";
+
+function saveRepeat(on) {
+  try {
+    localStorage.setItem(REPEAT_KEY, on ? "1" : "0");
+  } catch {}
+}
+
+export function repeatOn() {
+  const game = store.game;
+  if (game && typeof game.repeat === "boolean") return game.repeat;
+  try {
+    return localStorage.getItem(REPEAT_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function rememberProduction(nation) {
+  const game = store.game;
+  const orders = game.orders[nation];
+  game.production[nation] = { recruits: { ...orders.recruits }, tanks: { ...orders.tanks } };
+}
+
+function repeatProduction(nation) {
+  const { game, map } = store;
+  const last = game.production[nation];
+  if (!last || !repeatOn()) return;
+  const orders = game.orders[nation];
+  let budget = game.state.industry[nation];
+  for (const key in last.tanks) {
+    const id = Number(key);
+    if (game.state.owner[id] !== nation) continue;
+    const count = Math.min(last.tanks[key], maxTanks(game.state, id), Math.floor(budget / ARMOR_COST));
+    if (count <= 0) continue;
+    orders.tanks[id] = count;
+    budget -= count * ARMOR_COST;
+  }
+  for (const key in last.recruits) {
+    const id = Number(key);
+    if (game.state.owner[id] !== nation || !map.provinces[id].city) continue;
+    const count = Math.min(last.recruits[key], budget);
+    if (count <= 0) continue;
+    orders.recruits[id] = count;
+    budget -= count;
+  }
+}
+
 export function startPlanning() {
   const game = store.game;
   game.phase = "plan";
   game.orders = freshOrders();
+  game.history = [];
+  game.group = [];
+  for (const n of NATIONS) {
+    const mine = n === game.me || (game.mode !== "online" && game.seats[n].type === "local");
+    if (mine && game.state.alive[n]) repeatProduction(n);
+  }
   game.ready = NATIONS.map(() => 0);
   game.planned = NATIONS.map(() => 0);
   game.selected = -1;
@@ -337,6 +566,7 @@ export function endTurn() {
   if (isOnline()) {
     if (game.me < 0 || !game.state.alive[game.me] || game.state.winner >= 0) return;
     game.ready[game.me] = game.ready[game.me] ? 0 : 1;
+    if (game.ready[game.me]) rememberProduction(game.me);
     game.selected = -1;
     playSound("click");
     if (isGuest()) sendGuestOrders();
@@ -350,8 +580,10 @@ export function endTurn() {
   }
 
   if (!canPlan()) return;
+  rememberProduction(game.me);
   game.selected = -1;
   game.selectedNation = -1;
+  game.group = [];
   game.planned[game.me] = 1;
   const next = localSeats(game).find((n) => !game.planned[n]);
   if (next !== undefined) {
@@ -660,7 +892,9 @@ function runDemo(dt) {
     startDemo();
     return;
   }
-  const orders = NATIONS.map((n) => sanitizeOrders(map, game.state, n, planAiOrders(map, game.state, n)));
+  const orders = NATIONS.map((n) =>
+    sanitizeOrders(map, game.state, n, planAiOrders(map, game.state, n, "easy")),
+  );
   const { state, events } = resolveTurn(map, game.state, orders);
   startAnimation(game.state, state, events);
 }
