@@ -131,13 +131,6 @@ h2 {
   color: var(--dim);
 }
 
-.divider {
-  font-family: var(--display);
-  font-size: 12px;
-  letter-spacing: 0.3em;
-  color: #7d7a66;
-}
-
 .btn {
   min-width: 290px;
   padding: 13px 22px;
@@ -225,31 +218,120 @@ input {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 310px;
-  max-height: 190px;
+  width: min(420px, calc(94vw - 58px));
+  min-height: 74px;
+  max-height: min(300px, 38vh);
   overflow: auto;
+}
+
+.listings.busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.listings .note {
+  margin: auto;
+  padding: 10px 6px;
+  font-size: 15px;
 }
 
 .listing {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
   padding: 10px 12px;
   border: 1px solid #55553f;
   border-radius: 3px;
   background: rgba(0, 0, 0, 0.28);
   font-family: var(--display);
-  font-size: 16px;
+  font-size: 17px;
   letter-spacing: 0.04em;
   color: var(--gold);
   text-align: left;
 }
 
-.listing .count {
-  font-size: 13px;
-  color: var(--good);
+.listing:hover {
+  border-color: var(--accent);
+  background: rgba(241, 207, 107, 0.08);
+}
+
+.listing .about {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.listing .title {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.listing .detail {
+  font-family: var(--body);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+}
+
+.listing .count {
+  padding: 6px 10px;
+  border: 1px solid #9cc07f;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #56823f, #2f4d22);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: #f1ead2;
+  white-space: nowrap;
+}
+
+.browser-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(420px, calc(94vw - 58px));
+  text-align: left;
+}
+
+.browser-title #public-status {
+  letter-spacing: 0.16em;
+  color: var(--good);
+}
+
+.code-join {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(420px, calc(94vw - 58px));
+}
+
+.code-join summary {
+  padding: 6px;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-align: center;
+  color: #8f8b73;
+  cursor: pointer;
+}
+
+.code-join .code-row {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.code-join .code-input {
+  width: 170px;
+  padding: 6px;
+  font-size: 24px;
+}
+
+.code-join .btn {
+  min-width: 0;
 }
 
 .code {

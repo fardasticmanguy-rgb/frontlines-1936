@@ -38,20 +38,27 @@
           <span>COMMANDER NAME</span>
           <input id="commander-name" maxlength="16" autocomplete="off" spellcheck="false" />
         </label>
-        <div class="section-title">PUBLIC GAMES</div>
+        <div class="section-title browser-title">
+          <span>OPEN LOBBIES</span>
+          <span id="public-status">SEARCHING…</span>
+        </div>
         <div id="public-games" class="listings"></div>
         <button class="btn go" id="host-game">HOST A GAME</button>
-        <div class="divider">— OR JOIN WITH A CODE —</div>
-        <input
-          id="code-input"
-          class="code-input"
-          maxlength="4"
-          placeholder="CODE"
-          autocomplete="off"
-          autocapitalize="characters"
-          spellcheck="false"
-        />
-        <button class="btn" id="join-game">JOIN GAME</button>
+        <details class="code-join">
+          <summary>JOIN A PRIVATE GAME WITH A CODE</summary>
+          <div class="code-row">
+            <input
+              id="code-input"
+              class="code-input"
+              maxlength="4"
+              placeholder="CODE"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+            />
+            <button class="btn" id="join-game">JOIN</button>
+          </div>
+        </details>
         <button class="btn small" id="online-back">BACK</button>
       </div>
     </section>
@@ -143,6 +150,7 @@
           <button data-value="2">2</button>
           <button data-value="3">3</button>
           <button data-value="4">4</button>
+          <button data-value="5">5</button>
           <button data-value="6">6</button>
           <button data-value="8">8</button>
         </div>
@@ -160,8 +168,8 @@
         </div>
         <div class="option-row" id="option-visibility">
           <span class="option-label">LOBBY</span>
-          <button data-value="private">PRIVATE</button>
           <button data-value="public">PUBLIC</button>
+          <button data-value="private">PRIVATE</button>
         </div>
         <div class="option-row" id="option-timer">
           <span class="option-label">TURN TIMER</span>

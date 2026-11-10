@@ -6,6 +6,7 @@ const RETRY_DELAY = 2500;
 const JOIN_TIMEOUT = 20000;
 const RESUME_TIMEOUT = 70000;
 const RESUME_ATTEMPTS = 20;
+const FAREWELL_DELAY = 200;
 const NETWORK_ERRORS = new Set(["network", "server-error", "socket-error", "socket-closed"]);
 
 export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}) {
@@ -27,6 +28,7 @@ export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}
     let retryTimer = null;
     let lastHostMessage = 0;
     let attempts = 0;
+    let ended = false;
 
     const notify = () => {
       const peers = [];
@@ -108,6 +110,7 @@ export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}
 
     const acceptRoster = (list) => {
       lastHostMessage = performance.now();
+      ended = false;
       presences.clear();
       updatedAt.clear();
       for (const entry of list) {
@@ -162,6 +165,12 @@ export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}
       connection.on("data", (message) => {
         if (connection !== hostConnection) return;
         if (message?.type === "roster" && Array.isArray(message.list)) acceptRoster(message.list);
+        else if (message?.type === "closed") {
+          ended = true;
+          presences.clear();
+          updatedAt.clear();
+          notify();
+        }
       });
       const lost = () => connection === hostConnection && dropHost();
       connection.on("close", lost);
@@ -181,23 +190,28 @@ export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}
         lastSeen.set(id, performance.now());
         scheduleBroadcast();
       });
+      const drop = () => {
+        if (connections.get(id) !== connection) return;
+        connections.delete(id);
+        presences.delete(id);
+        updatedAt.delete(id);
+        lastSeen.delete(id);
+        notify();
+        scheduleBroadcast();
+      };
       connection.on("data", (message) => {
         if (connections.get(id) !== connection) return;
         lastSeen.set(id, performance.now());
+        if (message?.type === "leave") {
+          drop();
+          return;
+        }
         if (message?.type !== "presence" || !message.presence || typeof message.presence !== "object") return;
         presences.set(id, Object.freeze({ ...message.presence }));
         updatedAt.set(id, performance.now());
         notify();
         scheduleBroadcast();
       });
-      const drop = () => {
-        if (connections.get(id) !== connection) return;
-        connections.delete(id);
-        presences.delete(id);
-        updatedAt.delete(id);
-        notify();
-        scheduleBroadcast();
-      };
       connection.on("close", drop);
       connection.on("error", drop);
     }
@@ -259,13 +273,27 @@ export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}
         notify();
       },
       async leave() {
+        if (closed) return;
         closed = true;
         clearTimeout(retryTimer);
+        clearTimeout(broadcastTimer);
         clearInterval(heartbeat);
-        try {
-          peer?.destroy();
-        } catch {}
+        const farewell = { type: role === "host" ? "closed" : "leave" };
+        const targets = role === "host" ? [...connections.values()] : [hostConnection];
+        for (const connection of targets) {
+          if (!connection?.open) continue;
+          try {
+            connection.send(farewell);
+          } catch {}
+        }
+        const leaving = peer;
+        setTimeout(() => {
+          try {
+            leaving?.destroy();
+          } catch {}
+        }, FAREWELL_DELAY);
       },
+      ended: () => ended,
       connected: () =>
         role === "host"
           ? Boolean(peer && !peer.disconnected && !peer.destroyed)
