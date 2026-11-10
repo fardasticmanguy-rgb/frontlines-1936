@@ -19,7 +19,7 @@ A four-player grand strategy game for tablets, inspired by Hearts of Iron. Every
 - Diplomacy: factions of up to half the nations, invitations, betrayals, and sending aid; factions win together
 - Factories upgrade to level 3 and lose a level when captured
 - World events (strikes, booms, volunteers, partisans, harvests) and a monthly report
-- Online play for up to 8 players over WebRTC, with public and private lobbies and the same map settings
+- Online play for up to 8 players over WebRTC, with a lobby browser: hosted games are listed with their map and settings, tap one to join, no code needed (private games with a code are still possible)
 - Empty or disconnected seats are taken over by an AI; players can rejoin and hosts can resume
 - Production: a national production screen for infantry, tanks, forts and factories that repeats every turn, with an AUTO planner
 - Infantry, tanks and artillery: tanks rule open ground, artillery hits hard anywhere, both limited by factory levels; infantry absorb casualties first
