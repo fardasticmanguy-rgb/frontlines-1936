@@ -30,14 +30,13 @@ import {
   toast,
 } from "./ui.js";
 
-const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const HEARTBEAT_SECONDS = 1;
 const SEAT_RECLAIM_MS = 15000;
 const SAVE_LIFETIME_MS = 3 * 3600 * 1000;
 const HOST_SAVE_KEY = "flHost2";
 const NAME_KEY = "flName";
 const NAME_LENGTH = 16;
-const CODE_PATTERN = /^[A-Z0-9]{4}$/;
+const CODE_PATTERN = /^[A-Z0-9]{3,4}$/;
 const GUEST_SAVE_KEY = "flGuest2";
 const LOBBY_WATCH_MS = 500;
 const HOST_GONE_SECONDS = 8;
@@ -72,6 +71,62 @@ export function commanderName() {
     name = cleanName(localStorage.getItem(NAME_KEY));
   } catch {}
   return name || `Commander ${playerId.slice(0, 3).toUpperCase()}`;
+}
+
+export function hasCommanderName() {
+  try {
+    return Boolean(cleanName(localStorage.getItem(NAME_KEY)));
+  } catch {
+    return false;
+  }
+}
+
+let inbox = null;
+let inboxName = "";
+let inboxJob = Promise.resolve(true);
+let inviteHandler = null;
+
+export function onInvite(handler) {
+  inviteHandler = handler;
+}
+
+export const invitesAvailable = () => transportKind === "peer";
+
+async function claimInbox() {
+  const transport = await transportReady;
+  if (!transport?.openInbox || !hasCommanderName()) return true;
+  const name = commanderName();
+  if (inbox && inboxName === name) return true;
+  inbox?.close();
+  inbox = null;
+  inboxName = "";
+  try {
+    inbox = await transport.openInbox(name, (invite, reply) => {
+      const code = String(invite.code).toUpperCase();
+      if (!CODE_PATTERN.test(code)) return;
+      if (store.net || !inviteHandler) reply("busy");
+      else inviteHandler({ code, from: cleanName(invite.from) || "Someone" }, reply);
+    });
+    inboxName = name;
+    return true;
+  } catch (error) {
+    return error?.code !== "taken";
+  }
+}
+
+export function refreshInbox() {
+  inboxJob = inboxJob.then(claimInbox, claimInbox);
+  return inboxJob;
+}
+
+export async function invitePlayer(name) {
+  const net = store.net;
+  const transport = await transportReady;
+  const target = cleanName(name);
+  if (!net || !transport?.invite) return "unavailable";
+  if (!target) return "empty";
+  if (target.toLowerCase() === commanderName().toLowerCase()) return "self";
+  return transport.invite(target, { code: net.code, from: commanderName() });
 }
 
 export function setCommanderName(value) {
@@ -258,9 +313,7 @@ function updateListing(players) {
 }
 
 export function generateCode() {
-  let code = "";
-  for (let i = 0; i < 4; i++) code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
-  return code;
+  return String(100 + Math.floor(Math.random() * 900));
 }
 
 function roomPeers() {
@@ -434,6 +487,9 @@ export function renderLobby() {
   }
 
   $("lobby-code").textContent = net.code;
+  $("invite-row").hidden = !invitesAvailable();
+  $("lobby-options").hidden = !hosting;
+  $("lobby-seats").classList.toggle("many", seats.length > 4);
   $("lobby-seats").replaceChildren(
     ...seats.slice(0, NATIONS.length).map((id, n) => {
       const role = id === "ai" ? "AI COMMANDER" : n === 0 ? "HOST" : "PLAYER";
@@ -458,8 +514,8 @@ export function renderLobby() {
   const where = transportKind === "peer" ? "open this same link" : "open this game on claude.ai";
   const listed = hosting ? net.visibility === "public" : hostPeer()?.presence.open !== 0;
   $("lobby-link").textContent = listed
-    ? `Listed in the lobby browser. Friends ${where}, tap PLAY ONLINE and pick this lobby. No code needed.`
-    : `Private lobby. Friends ${where}, tap PLAY ONLINE and enter this code.`;
+    ? `Friends ${where}, tap PLAY ONLINE and pick this lobby, or type the code.`
+    : `Private lobby. Friends ${where}, tap PLAY ONLINE and type this code.`;
 
   const humans = seats.filter((id) => id !== "ai").length;
   if (hosting) {

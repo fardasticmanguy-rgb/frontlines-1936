@@ -1123,8 +1123,128 @@ input {
 
 .card.scroll {
   max-height: 94vh;
+  max-height: 94dvh;
   overflow-y: auto;
   gap: 10px;
+}
+
+.lobby-card {
+  padding: 16px 22px;
+}
+
+.lobby-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.lobby-head .code {
+  font-size: clamp(38px, 7vw, 54px);
+  line-height: 1.05;
+}
+
+.lobby-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px 22px;
+  max-width: 100%;
+}
+
+.lobby-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+#lobby-options {
+  max-width: 420px;
+}
+
+#lobby-seats .seat {
+  min-width: min(340px, calc(94vw - 48px));
+  padding: 6px 10px;
+  font-size: 16px;
+}
+
+#lobby-seats.many {
+  gap: 4px;
+}
+
+#lobby-seats.many .seat {
+  padding: 3px 10px;
+  font-size: 14px;
+}
+
+#lobby-seats .seat > span:last-child {
+  font-size: 12px;
+  text-align: right;
+}
+
+.invite-row {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.invite-row input,
+.name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font-family: var(--display);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+.name-input {
+  flex: none;
+  width: 290px;
+  max-width: 100%;
+  padding: 11px 12px;
+  font-size: 22px;
+}
+
+#invite-pop {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(360px, 92vw);
+  padding: 20px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(44, 47, 37, 0.99), rgba(27, 29, 23, 0.99));
+  box-shadow: 0 14px 60px rgba(0, 0, 0, 0.8);
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+#invite-text {
+  font-family: var(--display);
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+}
+
+.invite-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.invite-actions .btn {
+  min-width: 0;
+  padding: 11px 20px;
 }
 .seats.pick .seat {
   cursor: pointer;
