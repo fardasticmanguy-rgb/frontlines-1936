@@ -343,7 +343,10 @@ export function joinPeerRoom(hostId, role, { resume = false, options = {} } = {}
           setTimeout(start, delay);
         };
         if (type === "unavailable-id" && role === "host" && resume && attempts < RESUME_ATTEMPTS) retry(3000);
-        else if (type === "peer-unavailable" && role === "guest") fail("not_found");
+        else if (type === "peer-unavailable" && role === "guest" && attempts < 1) {
+          hostConnection = null;
+          retry(800);
+        } else if (type === "peer-unavailable" && role === "guest") fail("not_found");
         else if (NETWORK_ERRORS.has(type) && attempts < 3) retry(1500);
         else fail(type === "unavailable-id" ? "taken" : type || "upstream_error");
       });

@@ -10,12 +10,16 @@ import {
   commanderName,
   forgetGuestGame,
   generateCode,
+  hasCommanderName,
+  invitePlayer,
   launchGame,
   leaveRoom,
+  onInvite,
   onLobbyClosed,
   onlineTransport,
   openDirectory,
   openRoom,
+  refreshInbox,
   renderLobby,
   renderPublicGames,
   resumeHostedGame,
@@ -132,8 +136,8 @@ async function joinGame(code, listed = false) {
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
-  if (clean.length !== 4) {
-    toast("Enter the 4-letter code");
+  if (clean.length < 3 || clean.length > 4) {
+    toast("Enter the game code");
     return;
   }
   setCommanderName($("commander-name").value);
@@ -199,6 +203,92 @@ function showOnlineScreen() {
   });
 }
 
+const NAME_TAKEN = "That username is being used right now. Pick another.";
+
+async function saveUsername(value) {
+  setCommanderName(value);
+  const free = await refreshInbox();
+  if (!free) toast(NAME_TAKEN);
+  return free;
+}
+
+function openOnline() {
+  if (hasCommanderName()) {
+    showOnlineScreen();
+    return;
+  }
+  $("name-note").textContent = "Friends use it to invite you to their lobby.";
+  showScreen("name");
+  $("name-input").focus();
+}
+
+async function confirmUsername() {
+  const name = online.cleanName($("name-input").value);
+  if (name.length < 2) {
+    $("name-note").textContent = "Type a username with at least 2 characters.";
+    return;
+  }
+  $("name-go").disabled = true;
+  const free = await saveUsername(name);
+  $("name-go").disabled = false;
+  if (free) showOnlineScreen();
+  else $("name-note").textContent = NAME_TAKEN;
+}
+
+const INVITE_RESULTS = {
+  yes: (name) => `${name} is joining!`,
+  no: (name) => `${name} declined.`,
+  busy: (name) => `${name} is already in a game.`,
+  no_answer: (name) => `${name} did not answer.`,
+  offline: (name) => `${name} is not online. Check the spelling.`,
+  self: () => "That is you.",
+  empty: () => "Type your friend's username.",
+};
+
+async function sendLobbyInvite() {
+  const name = online.cleanName($("invite-name").value);
+  if (name) toast(`Inviting ${name}…`);
+  $("invite-send").disabled = true;
+  const result = await invitePlayer(name).catch(() => "unavailable");
+  $("invite-send").disabled = false;
+  toast((INVITE_RESULTS[result] ?? (() => "Could not send the invite."))(name));
+  if (result === "yes") $("invite-name").value = "";
+}
+
+let pendingInvite = null;
+
+function closeInvite(answer) {
+  const invite = pendingInvite;
+  pendingInvite = null;
+  $("invite-pop").hidden = true;
+  if (!invite) return null;
+  clearTimeout(invite.timer);
+  invite.reply(answer);
+  return invite;
+}
+
+function showInvite({ code, from }, reply) {
+  if (pendingInvite) {
+    reply("busy");
+    return;
+  }
+  pendingInvite = { code, reply, timer: setTimeout(() => closeInvite("no_answer"), 40000) };
+  $("invite-text").textContent = `${from} invited you to their war.`;
+  $("invite-pop").hidden = false;
+}
+
+function acceptInvite() {
+  const invite = closeInvite("yes");
+  if (!invite || store.net) return;
+  if (store.game && store.game.mode !== "demo") {
+    startDemo();
+    renderTopBar();
+    renderPanel();
+  }
+  setOnlineBusy(false);
+  joinGame(invite.code, true);
+}
+
 function lobbyClosed(reason) {
   if (store.net?.role !== "guest") return;
   forgetGuestGame();
@@ -209,7 +299,19 @@ function lobbyClosed(reason) {
 }
 
 function bindMenus() {
-  on("play-online", showOnlineScreen);
+  on("play-online", openOnline);
+  on("name-go", confirmUsername);
+  on("name-back", () => showScreen("menu"));
+  $("name-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") confirmUsername();
+  });
+  $("commander-name").addEventListener("change", () => saveUsername($("commander-name").value));
+  on("invite-send", sendLobbyInvite);
+  $("invite-name").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") sendLobbyInvite();
+  });
+  on("invite-yes", acceptInvite);
+  on("invite-no", () => closeInvite("no"));
   on("practice", () => {
     renderSetup();
     showScreen("setup");
@@ -368,6 +470,8 @@ bindMapInput();
 bindPanel();
 bindMenus();
 onLobbyClosed(lobbyClosed);
+onInvite(showInvite);
+refreshInbox();
 bindGlobalKeys();
 exposeDebugHandle();
 startDemo();

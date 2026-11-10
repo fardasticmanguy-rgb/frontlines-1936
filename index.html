@@ -30,12 +30,22 @@
       </div>
     </section>
 
-    <section id="online" class="screen">
+    <section id="name" class="screen">
       <div class="card">
+        <h2>PICK YOUR USERNAME</h2>
+        <p class="note" id="name-note">Friends use it to invite you to their lobby.</p>
+        <input id="name-input" class="name-input" maxlength="16" autocomplete="off" spellcheck="false" />
+        <button class="btn go" id="name-go">CONTINUE</button>
+        <button class="btn small" id="name-back">BACK</button>
+      </div>
+    </section>
+
+    <section id="online" class="screen">
+      <div class="card scroll">
         <h2>ONLINE WAR</h2>
         <p class="note" id="online-note">Connecting…</p>
         <label class="field">
-          <span>COMMANDER NAME</span>
+          <span>YOUR USERNAME</span>
           <input id="commander-name" maxlength="16" autocomplete="off" spellcheck="false" />
         </label>
         <div class="section-title browser-title">
@@ -51,6 +61,7 @@
               id="code-input"
               class="code-input"
               maxlength="4"
+              inputmode="numeric"
               placeholder="CODE"
               autocomplete="off"
               autocapitalize="characters"
@@ -134,56 +145,74 @@
     </section>
 
     <section id="lobby" class="screen">
-      <div class="card">
-        <p class="kicker">GAME CODE</p>
-        <div class="code" id="lobby-code">----</div>
-        <p class="note" id="lobby-link"></p>
-        <div class="seats" id="lobby-seats"></div>
-        <div class="option-row" id="option-scenario">
-          <span class="option-label">MAP</span>
-          <button data-value="random">RANDOM</button>
-          <button data-value="europe1936">EUROPE 1936</button>
-          <button data-value="europe">EUROPE 1939</button>
+      <div class="card scroll lobby-card">
+        <div class="lobby-head">
+          <p class="kicker">GAME CODE</p>
+          <div class="code" id="lobby-code">---</div>
+          <p class="note" id="lobby-link"></p>
         </div>
-        <div class="option-row" id="option-nations">
-          <span class="option-label">NATIONS</span>
-          <button data-value="2">2</button>
-          <button data-value="3">3</button>
-          <button data-value="4">4</button>
-          <button data-value="5">5</button>
-          <button data-value="6">6</button>
-          <button data-value="8">8</button>
-        </div>
-        <div class="option-row" id="option-size">
-          <span class="option-label">SIZE</span>
-          <button data-value="small">SMALL</button>
-          <button data-value="medium">MEDIUM</button>
-          <button data-value="large">LARGE</button>
-        </div>
-        <div class="option-row" id="option-difficulty">
-          <span class="option-label">AI</span>
-          <button data-value="easy">EASY</button>
-          <button data-value="normal">NORMAL</button>
-          <button data-value="hard">HARD</button>
-        </div>
-        <div class="option-row" id="option-visibility">
-          <span class="option-label">LOBBY</span>
-          <button data-value="public">PUBLIC</button>
-          <button data-value="private">PRIVATE</button>
-        </div>
-        <div class="option-row" id="option-timer">
-          <span class="option-label">TURN TIMER</span>
-          <button data-value="0">OFF</button>
-          <button data-value="30">30s</button>
-          <button data-value="45">45s</button>
-          <button data-value="60">60s</button>
-        </div>
-        <div class="option-row" id="option-length">
-          <span class="option-label">LENGTH</span>
-          <button data-value="12">QUICK · 12</button>
-          <button data-value="18">NORMAL · 18</button>
-          <button data-value="30">LONG · 30</button>
-          <button data-value="60">TOTAL WAR · 60</button>
+        <div class="lobby-body">
+          <div class="lobby-side">
+            <div class="seats" id="lobby-seats"></div>
+            <div class="invite-row" id="invite-row">
+              <input
+                id="invite-name"
+                maxlength="16"
+                placeholder="FRIEND'S USERNAME"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button class="btn small" id="invite-send">INVITE</button>
+            </div>
+          </div>
+          <div class="lobby-side" id="lobby-options">
+            <div class="option-row" id="option-scenario">
+              <span class="option-label">MAP</span>
+              <button data-value="random">RANDOM</button>
+              <button data-value="europe1936">EUROPE 1936</button>
+              <button data-value="europe">EUROPE 1939</button>
+            </div>
+            <div class="option-row" id="option-nations">
+              <span class="option-label">NATIONS</span>
+              <button data-value="2">2</button>
+              <button data-value="3">3</button>
+              <button data-value="4">4</button>
+              <button data-value="5">5</button>
+              <button data-value="6">6</button>
+              <button data-value="8">8</button>
+            </div>
+            <div class="option-row" id="option-size">
+              <span class="option-label">SIZE</span>
+              <button data-value="small">SMALL</button>
+              <button data-value="medium">MEDIUM</button>
+              <button data-value="large">LARGE</button>
+            </div>
+            <div class="option-row" id="option-difficulty">
+              <span class="option-label">AI</span>
+              <button data-value="easy">EASY</button>
+              <button data-value="normal">NORMAL</button>
+              <button data-value="hard">HARD</button>
+            </div>
+            <div class="option-row" id="option-visibility">
+              <span class="option-label">LOBBY</span>
+              <button data-value="public">PUBLIC</button>
+              <button data-value="private">PRIVATE</button>
+            </div>
+            <div class="option-row" id="option-timer">
+              <span class="option-label">TURN TIMER</span>
+              <button data-value="0">OFF</button>
+              <button data-value="30">30s</button>
+              <button data-value="45">45s</button>
+              <button data-value="60">60s</button>
+            </div>
+            <div class="option-row" id="option-length">
+              <span class="option-label">LENGTH</span>
+              <button data-value="12">QUICK · 12</button>
+              <button data-value="18">NORMAL · 18</button>
+              <button data-value="30">LONG · 30</button>
+              <button data-value="60">TOTAL WAR · 60</button>
+            </div>
+          </div>
         </div>
         <button class="btn go" id="launch">DECLARE WAR</button>
         <p class="note" id="lobby-note"></p>
@@ -341,6 +370,14 @@
     </div>
     <div id="banner" hidden></div>
     <div id="toast" hidden></div>
+    <div id="invite-pop" hidden>
+      <div class="kicker">INVITATION</div>
+      <div id="invite-text"></div>
+      <div class="invite-actions">
+        <button class="btn go" id="invite-yes">JOIN</button>
+        <button class="btn" id="invite-no">NO THANKS</button>
+      </div>
+    </div>
     <div id="tip" hidden></div>
     <button class="icon-button" id="fit-button" aria-label="Zoom out" hidden>⤢</button>
   </body>
