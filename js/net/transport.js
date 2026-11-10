@@ -1,4 +1,5 @@
 import { openPeerDirectory } from "./peer-directory.js";
+import { openInbox, sendInvite } from "./peer-inbox.js";
 import { joinPeerRoom } from "./peer-room.js";
 
 const PEERJS_SOURCES = [
@@ -67,6 +68,8 @@ function peerTransport() {
     join: (code, role, resume) =>
       joinPeerRoom(`frontlines-1936-${code.toLowerCase()}`, role, { resume, options }),
     openDirectory: (hooks) => openPeerDirectory(options, hooks),
+    openInbox: (name, onInvite) => openInbox(name, options, onInvite),
+    invite: (name, invite) => sendInvite(name, options, invite),
   };
 }
 
