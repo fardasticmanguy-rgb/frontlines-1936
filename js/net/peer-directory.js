@@ -4,6 +4,7 @@ const SCAN_INTERVAL = 4000;
 const PROBE_TIMEOUT = 5000;
 const LISTING_LIFETIME = 13000;
 const SERVE_LINGER = 6000;
+const SETTLE_DELAY = 1800;
 
 const slotId = (slot) => `${SLOT_PREFIX}${slot}`;
 
@@ -101,16 +102,33 @@ function createServer(options, getListing) {
 
 function createScanner(options, onChange) {
   let peer = null;
+  let settled = false;
+  let settleTimer = null;
   const listings = new Map();
-  const probing = new Set();
+  const probing = new Map();
+
+  const forget = (slot) => {
+    probing.get(slot)?.();
+    if (listings.delete(slot)) onChange();
+  };
 
   const ensurePeer = () => {
     if (peer && !peer.destroyed) {
       if (peer.disconnected) safely(() => peer.reconnect());
       return peer.open ? peer : null;
     }
-    peer = new window.Peer(options);
-    peer.on("error", () => {});
+    const created = new window.Peer(options);
+    peer = created;
+    created.on("open", () => {
+      if (peer === created) scan();
+    });
+    created.on("error", (error) => {
+      if (error?.type !== "peer-unavailable") return;
+      const text = String(error.message ?? "");
+      const at = text.lastIndexOf(SLOT_PREFIX);
+      const slot = at < 0 ? NaN : parseInt(text.slice(at + SLOT_PREFIX.length), 10);
+      if (Number.isInteger(slot)) forget(slot);
+    });
     return null;
   };
 
@@ -118,11 +136,12 @@ function createScanner(options, onChange) {
     if (probing.has(slot)) return;
     const connection = safely(() => scanner.connect(slotId(slot), { reliable: true }));
     if (!connection) return;
-    probing.add(slot);
     const finish = () => {
-      if (!probing.delete(slot)) return;
+      if (probing.get(slot) !== finish) return;
+      probing.delete(slot);
       safely(() => connection.close());
     };
+    probing.set(slot, finish);
     connection.on("data", (message) => {
       if (message?.type !== "listing") return;
       if (message.listing && typeof message.listing === "object") {
@@ -138,21 +157,31 @@ function createScanner(options, onChange) {
     setTimeout(finish, PROBE_TIMEOUT);
   };
 
+  function scan() {
+    const scanner = ensurePeer();
+    if (scanner) {
+      for (let slot = 0; slot < SLOT_COUNT; slot++) probe(scanner, slot);
+      settleTimer ??= setTimeout(() => {
+        settled = true;
+        onChange();
+      }, SETTLE_DELAY);
+    }
+    const now = performance.now();
+    let expired = false;
+    for (const [slot, entry] of listings) {
+      if (now - entry.seenAt <= LISTING_LIFETIME) continue;
+      listings.delete(slot);
+      expired = true;
+    }
+    if (expired) onChange();
+  }
+
   return {
-    scan() {
-      const scanner = ensurePeer();
-      if (scanner) for (let slot = 0; slot < SLOT_COUNT; slot++) probe(scanner, slot);
-      const now = performance.now();
-      let expired = false;
-      for (const [slot, entry] of listings) {
-        if (now - entry.seenAt <= LISTING_LIFETIME) continue;
-        listings.delete(slot);
-        expired = true;
-      }
-      if (expired) onChange();
-    },
+    scan,
     listings: () => [...listings.values()].map((entry) => entry.listing),
+    settled: () => settled || listings.size > 0,
     close() {
+      clearTimeout(settleTimer);
       safely(() => peer?.destroy());
       peer = null;
       listings.clear();
@@ -191,6 +220,7 @@ export async function openPeerDirectory(options, { browsing = () => true } = {})
 
   return {
     peers: snapshot,
+    settled: () => scanner.settled(),
     onPeers(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

@@ -1,9 +1,10 @@
 import { isEuropean } from "./scenarios/europe.js";
-import { planAiOrders } from "./ai.js";
+import { DIFFICULTIES, planAiOrders } from "./ai.js";
 import { nationCountFor, rosterFor } from "./setup.js";
 import { DEFAULT_TURNS, NATIONS, NATION_NAMES, TRAITS } from "./config.js";
 import { decodeOrders, decodeState, encodeOrders, encodeState } from "./codec.js";
 import { flagImage, flagUrlFor } from "./flags.js";
+import { MAP_SIZES } from "./nations.js";
 import {
   applyAnimation,
   isGuest,
@@ -38,6 +39,11 @@ const NAME_KEY = "flName";
 const NAME_LENGTH = 16;
 const CODE_PATTERN = /^[A-Z0-9]{4}$/;
 const GUEST_SAVE_KEY = "flGuest2";
+const LOBBY_WATCH_MS = 500;
+const HOST_GONE_SECONDS = 8;
+const HOST_MISSING_SECONDS = 14;
+const TIMERS = [0, 30, 45, 60];
+const LENGTHS = [12, 18, 30, 60];
 
 export const playerId = (() => {
   let id = null;
@@ -169,14 +175,33 @@ function publicListings() {
     .sort((a, b) => b.players - a.players || a.code.localeCompare(b.code));
 }
 
+function mapLabel({ scenario, nations }) {
+  if (scenario === "europe1936") return "EUROPE 1936";
+  if (scenario === "europe") return "EUROPE 1939";
+  return `RANDOM · ${nations} NATIONS`;
+}
+
+function settingsLabel(map, length, timer) {
+  const months = LENGTHS.includes(length) ? length : DEFAULT_TURNS;
+  const pace = TIMERS.includes(timer) && timer > 0 ? `${timer}s TURNS` : "NO TIMER";
+  return `${mapLabel(decodeMapOptions(map))} · ${months} MONTHS · ${pace}`;
+}
+
 export function renderPublicGames() {
   const list = $("public-games");
   if (!list) return;
   const games = publicListings();
+  const status = $("public-status");
+  const searching = !directory || directory.settled?.() === false;
+  if (status) {
+    status.textContent = games.length ? `${games.length} OPEN` : searching ? "SEARCHING…" : "NONE OPEN";
+  }
   if (!games.length) {
     const note = document.createElement("div");
     note.className = "note";
-    note.textContent = directory ? "No public games right now. Host one!" : "Looking for public games…";
+    note.textContent = searching
+      ? "Searching for open lobbies…"
+      : "No open lobbies right now. Host a game and it will show up here for everyone.";
     list.replaceChildren(note);
     return;
   }
@@ -185,12 +210,19 @@ export function renderPublicGames() {
       const row = document.createElement("button");
       row.className = "listing";
       row.dataset.code = game.code;
+      const about = document.createElement("span");
+      about.className = "about";
       const title = document.createElement("span");
+      title.className = "title";
       title.textContent = `${cleanName(game.name) || "Someone"}'s war`;
+      const detail = document.createElement("span");
+      detail.className = "detail";
+      detail.textContent = settingsLabel(game.map, game.length, game.timer);
+      about.append(title, detail);
       const count = document.createElement("span");
       count.className = "count";
       count.textContent = `${game.players}/${game.seats || 4} · JOIN`;
-      row.append(title, count);
+      row.append(about, count);
       return row;
     }),
   );
@@ -208,7 +240,17 @@ function updateListing(players) {
     return;
   }
   if (!directory) return;
-  const listing = visible ? { code: net.code, name: commanderName(), players, seats: seatCount(net) } : null;
+  const listing = visible
+    ? {
+        code: net.code,
+        name: commanderName(),
+        players,
+        seats: seatCount(net),
+        map: encodeMapOptions(net),
+        length: net.maxTurns,
+        timer: net.timer,
+      }
+    : null;
   const key = JSON.stringify(listing);
   if (key === listingKey) return;
   listingKey = key;
@@ -253,16 +295,22 @@ export async function openRoom(code, role, resume = false) {
     lobbyKey: null,
     timer: 45,
     maxTurns: DEFAULT_TURNS,
-    visibility: "private",
+    visibility: "public",
     scenario: "random",
     nations: 4,
     size: "medium",
     difficulty: "normal",
     hostMissingFor: 0,
+    hostSeen: false,
+    hostGoneFor: 0,
     offlineFor: 0,
     sinceBroadcast: 0,
     unsubscribe: [room.onPeers(onRoomChange, () => {})],
   };
+  if (role === "guest") {
+    const watch = setInterval(() => watchLobbyHost(LOBBY_WATCH_MS / 1000), LOBBY_WATCH_MS);
+    store.net.unsubscribe.push(() => clearInterval(watch));
+  }
   const name = commanderName();
   const presence = role === "host" ? { role, phase: "lobby", playerId, name } : { role, playerId, name };
   await room.presence(presence).catch(() => {});
@@ -282,6 +330,27 @@ export function leaveRoom() {
   store.net = null;
   closeDirectory();
   setBanner(null);
+}
+
+let lobbyClosedHandler = null;
+
+export function onLobbyClosed(handler) {
+  lobbyClosedHandler = handler;
+}
+
+function watchLobbyHost(dt) {
+  const net = store.net;
+  if (!net || net.role !== "guest" || currentScreen() !== "lobby") return;
+  if (hostPeer()) {
+    net.hostSeen = true;
+    net.hostGoneFor = 0;
+    return;
+  }
+  net.hostGoneFor += dt;
+  const ended = Boolean(net.room.ended?.());
+  const limit = net.hostSeen ? HOST_GONE_SECONDS : HOST_MISSING_SECONDS;
+  if (!ended && net.hostGoneFor <= limit) return;
+  lobbyClosedHandler?.(ended || net.hostSeen ? "closed" : "missing");
 }
 
 function lobbySeats() {
@@ -337,6 +406,7 @@ export function renderLobby() {
       net.maxTurns,
       encodeMapOptions(net),
       net.difficulty,
+      net.visibility,
     ]);
     if (key !== net.lobbyKey) {
       net.lobbyKey = key;
@@ -351,6 +421,8 @@ export function renderLobby() {
           timer: net.timer,
           length: net.maxTurns,
           map: encodeMapOptions(net),
+          difficulty: net.difficulty,
+          open: net.visibility === "public" ? 1 : 0,
         })
         .catch(() => {});
     }
@@ -383,32 +455,43 @@ export function renderLobby() {
     $(id).hidden = !hosting;
   }
   syncOptionButtons();
-  $("lobby-link").textContent =
-    transportKind === "peer"
-      ? "Friends open this same link, tap PLAY ONLINE and enter the code."
-      : "Friends open this game on claude.ai, tap PLAY ONLINE and enter the code.";
+  const where = transportKind === "peer" ? "open this same link" : "open this game on claude.ai";
+  const listed = hosting ? net.visibility === "public" : hostPeer()?.presence.open !== 0;
+  $("lobby-link").textContent = listed
+    ? `Listed in the lobby browser. Friends ${where}, tap PLAY ONLINE and pick this lobby. No code needed.`
+    : `Private lobby. Friends ${where}, tap PLAY ONLINE and enter this code.`;
 
   const humans = seats.filter((id) => id !== "ai").length;
   if (hosting) {
     updateListing(humans);
     const visibility =
       net.visibility === "public"
-        ? "Listed in Public Games."
+        ? "Anyone can join from the lobby browser."
         : "Private: only people with the code can join.";
+    const full = humans >= seats.length ? " The lobby is full." : " Empty seats are played by AI.";
     $("lobby-note").textContent =
       humans < 2
         ? `Waiting for players… Empty seats are played by AI. ${visibility}`
-        : `${humans} players in. Empty seats are played by AI. ${visibility}`;
+        : `${humans} players in.${full} ${visibility}`;
     return;
   }
   const host = hostPeer();
+  if (!host) {
+    $("lobby-note").textContent = net.hostSeen
+      ? "Lost contact with the host. Reconnecting…"
+      : "Connecting to the host…";
+    return;
+  }
+  const level = DIFFICULTIES[host.presence.difficulty]?.label;
   const settings =
-    host && host.presence.timer !== undefined
-      ? ` (${host.presence.length || DEFAULT_TURNS} months, ${host.presence.timer ? `${host.presence.timer}s turns` : "no timer"})`
+    typeof host.presence.map === "string"
+      ? `${settingsLabel(host.presence.map, host.presence.length, host.presence.timer)}${level ? ` · ${level} AI` : ""}. `
       : "";
-  $("lobby-note").textContent = host
-    ? `Connected! Waiting for the host to declare war…${settings}`
-    : "Looking for the host… double-check the code.";
+  $("lobby-note").textContent = seats.includes(playerId)
+    ? `${settings}Waiting for the host to declare war…`
+    : seats.length
+      ? `${settings}This lobby is full. You will watch as a spectator unless a seat opens up.`
+      : "Connected! Waiting for the host…";
 }
 
 const encodeMapOptions = (net) => `${net.scenario}:${net.nations}:${net.size}`;
@@ -417,8 +500,8 @@ function decodeMapOptions(text) {
   const [scenario, nations, size] = String(text || "").split(":");
   return {
     scenario: isEuropean(scenario) ? scenario : "random",
-    nations: Number(nations) || 4,
-    size: size || "medium",
+    nations: Math.min(NATIONS.length, Math.max(2, Math.floor(Number(nations)) || 4)),
+    size: MAP_SIZES[size] ? size : "medium",
   };
 }
 
@@ -463,7 +546,12 @@ function onRoomChange() {
   if (net.role !== "guest") return;
 
   const host = hostPeer();
-  if (!host) return;
+  if (!host) {
+    if (net.room.ended?.()) watchLobbyHost(0);
+    return;
+  }
+  net.hostSeen = true;
+  net.hostGoneFor = 0;
   const presence = host.presence;
   if (
     presence.phase === "play" &&
