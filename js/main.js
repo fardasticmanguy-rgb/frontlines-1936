@@ -12,6 +12,7 @@ import {
   generateCode,
   launchGame,
   leaveRoom,
+  onLobbyClosed,
   onlineTransport,
   openDirectory,
   openRoom,
@@ -46,6 +47,7 @@ import { cycleRotate, resetZoom, resizeViewport, view, viewSettings } from "./vi
 
 const ERROR_MESSAGES = {
   not_found: "No game found with that code.",
+  gone: "That lobby just closed. Pick another or host your own.",
   unavailable: "Online play is not available here.",
   not_permitted: "Online rooms are not available for this account.",
   timeout: "Connection timed out. Check your internet and try again.",
@@ -58,9 +60,13 @@ function on(id, handler) {
   });
 }
 
+let onlineBusy = false;
+
 function setOnlineBusy(busy, message) {
+  onlineBusy = busy;
   $("host-game").disabled = busy;
   $("join-game").disabled = busy;
+  $("public-games").classList.toggle("busy", busy);
   if (message) $("online-note").textContent = message;
 }
 
@@ -102,6 +108,7 @@ function openLobby() {
 }
 
 async function hostGame() {
+  if (onlineBusy) return;
   setCommanderName($("commander-name").value);
   setOnlineBusy(true, "Creating game…");
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -119,7 +126,8 @@ async function hostGame() {
   setOnlineBusy(false);
 }
 
-async function joinGame(code) {
+async function joinGame(code, listed = false) {
+  if (onlineBusy) return;
   const clean = String(code)
     .trim()
     .toUpperCase()
@@ -136,7 +144,7 @@ async function joinGame(code) {
     openLobby();
     syncGuestLobby();
   } catch (error) {
-    reportNetworkError(error, true);
+    reportNetworkError(listed && error?.code === "not_found" ? { code: "gone" } : error, true);
   }
   setOnlineBusy(false);
 }
@@ -164,9 +172,11 @@ async function resumeSavedGame() {
         ? "Could not resume. The game may have expired."
         : "Could not rejoin. The game may be over.",
     );
+    if (kind !== "host" && error?.code === "not_found") forgetGuestGame();
   }
   button.disabled = false;
   button.textContent = label;
+  refreshResumeButton();
 }
 
 function showOnlineScreen() {
@@ -182,11 +192,20 @@ function showOnlineScreen() {
     }
     $("online-note").textContent =
       transport.kind === "peer"
-        ? "Join a public game, enter a friend's code, or host your own. Up to 4 players."
-        : "Host a game or join one with a code. Friends need this game open on claude.ai.";
+        ? "Tap an open lobby to join it, or host your own. Up to 8 players."
+        : "Tap an open lobby to join it, or host your own. Friends need this game open on claude.ai.";
     setOnlineBusy(false);
     openDirectory();
   });
+}
+
+function lobbyClosed(reason) {
+  if (store.net?.role !== "guest") return;
+  forgetGuestGame();
+  leaveRoom();
+  refreshResumeButton();
+  showOnlineScreen();
+  toast(reason === "closed" ? "The host closed the lobby." : "Could not reach the host.");
 }
 
 function bindMenus() {
@@ -235,7 +254,7 @@ function bindMenus() {
   });
   $("public-games").addEventListener("click", (event) => {
     const listing = event.target.closest(".listing");
-    if (listing) joinGame(listing.dataset.code);
+    if (listing) joinGame(listing.dataset.code, true);
   });
 
   on("launch", launchGame);
@@ -348,6 +367,7 @@ window.addEventListener("resize", () => resizeViewport(canvas));
 bindMapInput();
 bindPanel();
 bindMenus();
+onLobbyClosed(lobbyClosed);
 bindGlobalKeys();
 exposeDebugHandle();
 startDemo();
