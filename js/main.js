@@ -194,10 +194,7 @@ function showOnlineScreen() {
         "Online play could not start here. Check your internet connection and reload.";
       return;
     }
-    $("online-note").textContent =
-      transport.kind === "peer"
-        ? "Tap an open lobby to join it, or host your own. Up to 8 players."
-        : "Tap an open lobby to join it, or host your own. Friends need this game open on claude.ai.";
+    $("online-note").textContent = "Tap an open lobby to join it, or host your own. Up to 8 players.";
     setOnlineBusy(false);
     openDirectory();
   });

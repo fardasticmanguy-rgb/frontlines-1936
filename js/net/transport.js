@@ -6,7 +6,6 @@ const PEERJS_SOURCES = [
   "https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js",
   "https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js",
 ];
-const CLAUDE_WAIT_MS = 3000;
 
 function loadScript(src) {
   return new Promise((resolve) => {
@@ -40,27 +39,6 @@ function signalingServer() {
   };
 }
 
-async function waitForClaude() {
-  const deadline = performance.now() + CLAUDE_WAIT_MS;
-  while (!window.claude?.use && performance.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return Boolean(window.claude?.use);
-}
-
-function claudeTransport(room) {
-  return {
-    kind: "claude",
-    join: (code) => room.join(`fl36-${code.toLowerCase()}`),
-    openDirectory: async () => ({
-      peers: () => room.peers(),
-      onPeers: (listener) => room.onPeers(listener),
-      presence: (patch) => room.presence(patch),
-      leave: () => room.presence({ listing: null }),
-    }),
-  };
-}
-
 function peerTransport() {
   const options = signalingServer();
   return {
@@ -74,13 +52,6 @@ function peerTransport() {
 }
 
 async function detectTransport() {
-  if (await waitForClaude()) {
-    try {
-      const room = await window.claude.use("room");
-      if (room) return claudeTransport(room);
-    } catch {}
-    return null;
-  }
   return (await loadPeerJs()) ? peerTransport() : null;
 }
 

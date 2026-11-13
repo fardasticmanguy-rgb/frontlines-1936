@@ -511,7 +511,7 @@ export function renderLobby() {
     $(id).hidden = !hosting;
   }
   syncOptionButtons();
-  const where = transportKind === "peer" ? "open this same link" : "open this game on claude.ai";
+  const where = "open this same link";
   const listed = hosting ? net.visibility === "public" : hostPeer()?.presence.open !== 0;
   $("lobby-link").textContent = listed
     ? `Friends ${where}, tap PLAY ONLINE and pick this lobby, or type the code.`
